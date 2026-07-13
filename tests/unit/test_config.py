@@ -1,0 +1,95 @@
+"""Tests for explicit, validated, and safe configuration loading."""
+
+import json
+import os
+from pathlib import Path
+
+import pytest
+from pydantic import ValidationError
+
+from repopilot.infrastructure.config import AppSettings, load_settings
+
+
+@pytest.fixture(autouse=True)
+def clear_repopilot_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep every settings test independent from the developer machine environment."""
+
+    for name in tuple(os.environ):
+        if name.startswith("REPOPILOT_"):
+            monkeypatch.delenv(name)
+
+
+def test_non_sensitive_defaults_are_available() -> None:
+    settings = AppSettings(_env_file=None)
+
+    assert settings.app_name == "RepoPilot"
+    assert settings.app_env == "development"
+    assert settings.log_level == "INFO"
+    assert settings.model_api_key is None
+
+
+def test_environment_variables_override_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REPOPILOT_APP_NAME", "RepoPilot Test")
+    monkeypatch.setenv("REPOPILOT_MODEL_TEMPERATURE", "0.25")
+
+    settings = AppSettings(_env_file=None)
+
+    assert settings.app_name == "RepoPilot Test"
+    assert settings.model_temperature == 0.25
+
+
+def test_direct_values_override_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("REPOPILOT_APP_ENV", "from-environment")
+
+    settings = AppSettings(app_env="from-constructor", _env_file=None)
+
+    assert settings.app_env == "from-constructor"
+
+
+def test_explicit_env_file_loading_is_isolated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    env_path = tmp_path / "p0.env"
+    env_path.write_text("REPOPILOT_APP_ENV=from-file\n", encoding="utf-8")
+    monkeypatch.delenv("REPOPILOT_APP_ENV", raising=False)
+
+    settings = load_settings(env_path)
+
+    assert settings.app_env == "from-file"
+
+
+def test_safe_dump_and_json_do_not_expose_sensitive_values() -> None:
+    secret = "p0-secret-value"
+    settings = AppSettings(
+        model_api_key=secret,
+        model_base_url="https://example.com/v1?token=also-secret",
+        _env_file=None,
+    )
+
+    settings_repr = repr(settings)
+    default_export = json.dumps(settings.model_dump(mode="json"))
+    safe_export = json.dumps(settings.safe_dump())
+
+    assert secret not in settings_repr
+    assert "also-secret" not in settings_repr
+    assert secret not in default_export
+    assert "also-secret" not in default_export
+    assert secret not in safe_export
+    assert "also-secret" not in safe_export
+    assert "model_api_key" not in settings.safe_dump()
+    assert "model_base_url" not in settings.safe_dump()
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("model_temperature", -0.01),
+        ("model_temperature", 2.01),
+        ("model_timeout_seconds", 0),
+        ("model_timeout_seconds", 301),
+    ],
+)
+def test_invalid_model_limits_are_rejected(field: str, value: float) -> None:
+    with pytest.raises(ValidationError):
+        AppSettings(**{field: value}, _env_file=None)

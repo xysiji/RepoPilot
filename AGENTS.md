@@ -10,3 +10,21 @@
 8. 不得把 `reference_materials/` 中的内容复制到公开的 `README.md` 或其他公开材料。
 9. 不得为了尚未确认的未来需求过度设计或提前实现。
 10. 安全边界必须通过代码进行验证，不能只依赖 Prompt 约束。
+
+## Windows Python environment
+
+This project requires Python 3.12.
+
+The canonical Windows project interpreter is:
+
+`.\.venv\Scripts\python.exe`
+
+Codex desktop tasks do not assume that an external PowerShell virtual environment has been inherited.
+
+Do not use bare `python`, `pip`, or `pytest` commands for project work. Use:
+
+- `.\.venv\Scripts\python.exe`
+- `.\.venv\Scripts\python.exe -m pip`
+- `.\.venv\Scripts\python.exe -m pytest`
+
+The system Python 3.14 installation must not be used for this project.
