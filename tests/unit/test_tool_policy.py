@@ -5,7 +5,7 @@ from pathlib import Path
 import pytest
 from pydantic import BaseModel
 
-from repopilot.tools.contracts import ReadFileArgs, ToolEffect
+from repopilot.tools.contracts import ProposePatchInput, ReadFileArgs, ToolEffect
 from repopilot.tools.policy import (
     PRODUCTION_TOOL_EFFECTS,
     ToolSafetyPolicy,
@@ -17,7 +17,7 @@ class EmptyArgs(BaseModel):
     pass
 
 
-def test_all_production_tools_are_explicitly_read_only(tmp_path: Path) -> None:
+def test_all_production_tools_have_explicit_three_state_actions(tmp_path: Path) -> None:
     policy = ToolSafetyPolicy(WorkspaceGuard(tmp_path))
 
     decisions = {
@@ -25,10 +25,14 @@ def test_all_production_tools_are_explicitly_read_only(tmp_path: Path) -> None:
         for name in PRODUCTION_TOOL_EFFECTS
     }
 
-    assert set(decisions) == {"list_files", "read_file", "search_code"}
-    assert all(decision.allowed for decision in decisions.values())
-    assert all(decision.effect is ToolEffect.READ_ONLY for decision in decisions.values())
-    assert all(not decision.requires_approval for decision in decisions.values())
+    assert set(decisions) == {"list_files", "read_file", "search_code", "propose_patch"}
+    assert all(
+        decisions[name].action == "allow"
+        for name in PRODUCTION_TOOL_EFFECTS
+        if name != "propose_patch"
+    )
+    assert decisions["propose_patch"].action == "require_approval"
+    assert decisions["propose_patch"].effect is ToolEffect.WRITE
 
 
 @pytest.mark.parametrize(
@@ -51,7 +55,8 @@ def test_side_effect_and_unclassified_tools_fail_closed(
 
     assert decision.allowed is False
     assert decision.failure and decision.failure.code == expected_code
-    assert decision.requires_approval is (effect in {ToolEffect.WRITE, ToolEffect.COMMAND})
+    assert decision.requires_approval is False
+    assert decision.action == "deny"
 
 
 @pytest.mark.parametrize(
@@ -180,3 +185,27 @@ def test_policy_is_pure_and_does_not_mutate_validated_arguments(tmp_path: Path) 
 
     assert decision.allowed is True
     assert arguments.model_dump() == before
+
+
+def test_only_registered_patch_write_requires_approval(tmp_path: Path) -> None:
+    guard = WorkspaceGuard(tmp_path)
+    arguments = ProposePatchInput(path="a.py", new_content="new\n", rationale="change")
+
+    decision = ToolSafetyPolicy(guard).evaluate(
+        tool_name="propose_patch",
+        validated_args=arguments,
+    )
+    unregistered = ToolSafetyPolicy(guard, {"other_write": ToolEffect.WRITE}).evaluate(
+        tool_name="other_write",
+        validated_args=arguments,
+    )
+
+    assert decision.action == "require_approval"
+    assert decision.allowed is False and decision.requires_approval is True
+    assert unregistered.action == "deny"
+    assert unregistered.failure and unregistered.failure.code == "side_effect_not_supported"
+    assert arguments.model_dump() == {
+        "path": "a.py",
+        "new_content": "new\n",
+        "rationale": "change",
+    }

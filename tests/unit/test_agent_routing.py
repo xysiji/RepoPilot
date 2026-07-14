@@ -3,7 +3,6 @@
 from copy import deepcopy
 
 from langchain_core.messages import AIMessage
-from langgraph.graph import END
 
 from repopilot.agent.routing import route_after_model, route_after_tools
 from repopilot.agent.state import create_initial_state
@@ -22,23 +21,21 @@ def test_route_after_model_sends_tool_calls_to_tools_without_mutating_state() ->
     assert state == before
 
 
-def test_route_after_model_ends_for_all_terminal_statuses() -> None:
-    for status in (
-        "success",
-        "max_steps_exceeded",
-        "model_error",
-        "invalid_model_response",
-    ):
-        state = create_initial_state("goal", 3)
-        state["status"] = status
-        assert route_after_model(state) == END
+def test_route_after_model_sends_success_to_report_and_failures_to_reviewer() -> None:
+    success = create_initial_state("goal", 3)
+    success["status"] = "success"
+    assert route_after_model(success) == "final_report"
+    for status in ("max_steps_exceeded", "model_error", "invalid_model_response"):
+        failed = create_initial_state("goal", 3)
+        failed["status"] = status
+        assert route_after_model(failed) == "reviewer"
 
 
-def test_route_after_model_defensively_ends_running_state_without_tool_calls() -> None:
+def test_route_after_model_defensively_reviews_running_state_without_tool_calls() -> None:
     state = create_initial_state("goal", 3)
     state["messages"].append(AIMessage(content="answer"))
 
-    assert route_after_model(state) == END
+    assert route_after_model(state) == "reviewer"
 
 
 def test_route_after_tools_only_returns_to_model_while_running() -> None:
@@ -47,4 +44,4 @@ def test_route_after_tools_only_returns_to_model_while_running() -> None:
     terminal["status"] = "max_steps_exceeded"
 
     assert route_after_tools(running) == "model"
-    assert route_after_tools(terminal) == END
+    assert route_after_tools(terminal) == "reviewer"

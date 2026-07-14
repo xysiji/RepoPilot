@@ -51,7 +51,10 @@ def test_agent_api_runs_graph_offline_without_leaking_tool_content(
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "success"
-    assert payload["final_answer"] == "README describes the offline P2 graph fixture."
+    assert payload["final_answer"] == "The run completed without applying a patch."
+    assert payload["final_report"]["model_final_text"] == (
+        "README describes the offline P2 graph fixture."
+    )
     assert [item["tool_name"] for item in payload["tool_executions"]] == ["read_file"]
     assert "private README source" not in response.text
     assert secret not in response.text

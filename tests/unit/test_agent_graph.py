@@ -1,4 +1,4 @@
-"""Behavior and topology tests for the sole P2 production execution engine."""
+"""Behavior and topology tests for the sole P4 production execution engine."""
 
 import asyncio
 import json
@@ -10,10 +10,12 @@ import pytest
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import StructuredTool
+from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.errors import GraphRecursionError
 
 from repopilot.agent.graph import build_agent_graph
 from repopilot.agent.state import create_initial_state
+from repopilot.patching.applicator import PatchApplicator
 from repopilot.services.agent_service import AgentService
 from repopilot.tools.executor import SafeToolExecutor
 from repopilot.tools.policy import ToolSafetyPolicy, WorkspaceGuard
@@ -32,7 +34,7 @@ def _run(service: AgentService, goal: str, max_steps: int = 3):
 def _runtime(workspace: Path):
     guard = WorkspaceGuard(workspace)
     tools = build_readonly_tools(guard)
-    return tools, SafeToolExecutor(tools, ToolSafetyPolicy(guard))
+    return tools, SafeToolExecutor(tools, ToolSafetyPolicy(guard)), PatchApplicator(guard)
 
 
 class BindingFailureModel(ScriptedToolCallingModel):
@@ -46,14 +48,25 @@ class BindingFailureModel(ScriptedToolCallingModel):
         raise RuntimeError("binding failed")
 
 
-def test_graph_topology_is_explicit_and_compiled_without_checkpointer(tmp_path: Path) -> None:
+def test_graph_topology_is_explicit_and_compiled_with_checkpointer(tmp_path: Path) -> None:
     model = ScriptedToolCallingModel(responses=[AIMessage(content="done")])
-    tools, executor = _runtime(tmp_path)
-    graph = build_agent_graph(model, tools, executor)
+    tools, executor, applicator = _runtime(tmp_path)
+    graph = build_agent_graph(model, tools, executor, applicator)
     drawable = graph.get_graph()
 
-    assert set(drawable.nodes) == {"__start__", "model", "tools", "__end__"}
-    assert graph.checkpointer is None
+    assert set(drawable.nodes) == {
+        "__start__",
+        "model",
+        "tools",
+        "approval",
+        "apply_patch",
+        "reject_patch",
+        "tester",
+        "reviewer",
+        "final_report",
+        "__end__",
+    }
+    assert isinstance(graph.checkpointer, InMemorySaver)
     assert "model" in drawable.draw_mermaid()
     assert "tools" in drawable.draw_mermaid()
 
@@ -64,9 +77,11 @@ def test_direct_answer_preserves_goal_and_counts_model_rounds(tmp_path: Path) ->
     result = _run(AgentService(tmp_path, model), "original goal")
 
     assert result.status == "success"
-    assert result.final_answer == "direct answer"
+    assert result.final_answer == "The run completed without applying a patch."
+    assert result.final_report is not None
+    assert result.final_report.model_final_text == "direct answer"
     assert result.steps == 1
-    assert model.bound_tool_names == ["list_files", "read_file", "search_code"]
+    assert model.bound_tool_names == ["list_files", "read_file", "search_code", "propose_patch"]
     assert isinstance(model.received_messages[0][0], HumanMessage)
     assert model.received_messages[0][0].content == "original goal"
 
@@ -267,7 +282,7 @@ def test_graph_builder_rejects_duplicate_tool_names() -> None:
     model = ScriptedToolCallingModel(responses=[AIMessage(content="unused")])
 
     with pytest.raises(ValueError, match="tool names must be unique"):
-        build_agent_graph(model, tools, None)  # type: ignore[arg-type]
+        build_agent_graph(model, tools, None, None)  # type: ignore[arg-type]
 
 
 def test_unexpected_graph_recursion_error_is_converted_without_traceback(
@@ -280,7 +295,7 @@ def test_unexpected_graph_recursion_error_is_converted_without_traceback(
 
     monkeypatch.setattr(
         "repopilot.services.agent_service.build_agent_graph",
-        lambda model, tools, executor: RecursingGraph(),
+        lambda *args, **kwargs: RecursingGraph(),
     )
     service = AgentService(
         tmp_path,
@@ -299,14 +314,29 @@ def test_compiled_graph_reuse_does_not_share_state_between_invocations(tmp_path:
     model = ScriptedToolCallingModel(
         responses=[AIMessage(content="first"), AIMessage(content="second")]
     )
-    tools, executor = _runtime(tmp_path)
-    graph = build_agent_graph(model, tools, executor)
+    tools, executor, applicator = _runtime(tmp_path)
+    graph = build_agent_graph(model, tools, executor, applicator)
 
-    first = asyncio.run(graph.ainvoke(create_initial_state("goal one", 2)))
-    second = asyncio.run(graph.ainvoke(create_initial_state("goal two", 2)))
+    first = asyncio.run(
+        graph.ainvoke(
+            create_initial_state("goal one", 2, "run-one"),
+            {"configurable": {"thread_id": "run-one"}},
+        )
+    )
+    second = asyncio.run(
+        graph.ainvoke(
+            create_initial_state("goal two", 2, "run-two"),
+            {"configurable": {"thread_id": "run-two"}},
+        )
+    )
 
-    assert first["final_answer"] == "first"
-    assert second["final_answer"] == "second"
+    assert first["model_final_text"] == "first"
+    assert second["model_final_text"] == "second"
+    assert (
+        first["final_answer"]
+        == second["final_answer"]
+        == ("The run completed without applying a patch.")
+    )
     assert len(first["messages"]) == len(second["messages"]) == 2
     assert first["messages"][0].content == "goal one"
     assert second["messages"][0].content == "goal two"
@@ -323,12 +353,17 @@ def test_final_graph_state_has_complete_protocol_sequence(tmp_path: Path) -> Non
             AIMessage(content="done"),
         ]
     )
-    tools, executor = _runtime(tmp_path)
-    graph = build_agent_graph(model, tools, executor)
+    tools, executor, applicator = _runtime(tmp_path)
+    graph = build_agent_graph(model, tools, executor, applicator)
 
-    final = asyncio.run(graph.ainvoke(create_initial_state("goal", 3)))
+    final = asyncio.run(
+        graph.ainvoke(
+            create_initial_state("goal", 3, "run-final"),
+            {"configurable": {"thread_id": "run-final"}},
+        )
+    )
 
     assert [message.type for message in final["messages"]] == ["human", "ai", "tool", "ai"]
     assert final["model_calls"] == 2
     assert final["status"] == "success"
-    assert final["tool_executions"][0].tool_call_id == "read"
+    assert final["tool_executions"][0]["tool_call_id"] == "read"

@@ -19,13 +19,33 @@ def test_initial_state_uses_fresh_containers_and_model_round_semantics() -> None
     assert first["tool_executions"] is not second["tool_executions"]
     assert set(AgentState.__annotations__) == {
         "messages",
+        "run_id",
         "model_calls",
         "max_steps",
         "status",
         "final_answer",
         "error",
         "tool_executions",
+        "pending_approval",
+        "approval_decision",
+        "repair_attempts",
+        "max_repair_attempts",
+        "test_runs",
+        "latest_test_result",
+        "applied_patch_context",
+        "applied_patches",
+        "review_result",
+        "final_report",
+        "approval_count",
+        "model_final_text",
+        "last_patch_error_code",
     }
+    assert first["pending_approval"] is None
+    assert first["approval_decision"] is None
+    assert first["repair_attempts"] == 0
+    assert first["max_repair_attempts"] == 3
+    assert first["test_runs"] is not second["test_runs"]
+    assert first["applied_patches"] is not second["applied_patches"]
 
 
 def test_message_and_execution_reducers_append_partial_node_updates() -> None:
@@ -43,7 +63,7 @@ def test_message_and_execution_reducers_append_partial_node_updates() -> None:
         assert len(state["messages"]) == 1
         return {
             "messages": [AIMessage(content="done")],
-            "tool_executions": [execution],
+            "tool_executions": [execution.model_dump(mode="json")],
         }
 
     builder = StateGraph(AgentState)
@@ -54,4 +74,4 @@ def test_message_and_execution_reducers_append_partial_node_updates() -> None:
     result = builder.compile().invoke(create_initial_state("goal", 2))
 
     assert [message.type for message in result["messages"]] == ["human", "ai"]
-    assert result["tool_executions"] == [execution]
+    assert result["tool_executions"] == [execution.model_dump(mode="json")]

@@ -116,16 +116,16 @@
 2. **KamaClaude 对应阶段**：S5 Permission Policy/Manager；借鉴 S3 write_file，但不迁移通用写工具。
 3. **必读课程**：`08-s5-tool-safety.md`；补读 `03-s1-agent-loop.md` 的工具执行顺序。
 4. **必读源码**：`core/permissions/policy.py`、`core/permissions/manager.py`、`core/permissions/storage.py`、`core/tools/invocation.py`、`core/tools/builtin/write_file.py`、`core/app.py` 的 permission handler；测试 `test_permission_manager.py`、`test_permission_policy.py`、`test_s5_permission_flow.py`。
-5. **实现功能**：ChangeProposal/FileEdit、generate_patch、Patch hash、approval node interrupt、approval API、apply_patch 全量预检/原子替换/尽力回滚、批准和拒绝路由。
+5. **实际实现**：单个既有 UTF-8 普通文件的 `propose_patch(path,new_content,rationale)`；系统计算完整 Diff/双哈希；Approval Node 动态 interrupt；同 thread resume；Apply/Reject 节点；同目录临时文件与 `os.replace`。
 6. **允许修改目录**：`agent/`、`services/`、`schemas/`、`api/`、`tools/`（仅程序化 Patch 接口）、测试/docs。
-7. **禁止实现**：always_allow/deny、审批时自由编辑、通用 write_file/bash、测试反馈循环、持久 SQLite（本阶段可 InMemorySaver）、UI。
-8. **输入/输出**：输入结构化 FileEdit；输出 PatchResult、ApprovalRequest、ApplyPatchResult 和批准/拒绝 final report。
-9. **验收场景**：运行到 interrupt 前仓库不变；批准相同 hash 后才修改；拒绝不修改；过期 hash/HEAD/preimage 被拒绝；每个新 Patch 有独立批准。
-10. **必须测试**：unified diff 正确性、空/冲突/重复 old snippet、文件/字节上限、interrupt payload、同 thread resume、错误 thread/hash、重复批准、dirty tree、审批后文件变化、半失败回滚。
+7. **禁止实现**：多文件、创建/删除/重命名、用户 edit、always allow/deny、通用 write_file/bash、Planner、pytest 反馈循环、持久 SQLite、UI。
+8. **输入/输出**：模型输入为 path/new_content/rationale；输出 checkpointed PatchProposal、安全 Approval view 和最终配对 ToolMessage。
+9. **验收场景**：interrupt 前字节不变；批准同一 proposal 后才修改；拒绝逐字节不变；等待期间变化返回 stale；顺序或同进程并发重复 resume 不重复写；新 saver 无法恢复。
+10. **必须测试**：Schema/资源上限、完整 Diff/双哈希、动态 interrupt、同 thread resume、错误 run/proposal、mixed batch、最后轮次、原子替换/清理、approve/reject/stale/API 脱敏。
 11. **必须理解**：HITL、interrupt 节点重放语义、幂等性、批准绑定、TOCTOU、乐观并发控制、fail closed。
-12. **亲手复写**：approval 节点与 apply 前的五项复核；不得把关键批准条件交给生成式代码后不理解。
-13. **主动修改练习**：给 ApprovalRequest 增加风险等级并从文件类型/变更行数确定性计算，验证不由 LLM 自报风险。
-14. **故障注入练习**：interrupt 后人工改动目标文件，再提交旧 hash 批准，证明系统拒绝且不覆盖人工改动。
+12. **亲手复写**：ProposePatchInput、ProposalBuilder、Approval Node、Apply Node、start/resume Service，共 200–320 行。
+13. **主动修改练习**：设计“用户编辑后重新提案”，必须重新计算 Diff/哈希并生成新 proposal_id，旧批准失效。
+14. **故障注入练习**：interrupt 后改文件、换 thread、篡改 Diff、重复 resume、replace 失败，证明都不会静默写错内容。
 15. **预计代码量**：产品 200–300 行；测试 220–330 行。
 16. **预计学习时间**：快速实现 2–3 小时；完整学习 6–8 小时。
 17. **面试题范围**：interrupt/resume、Patch 哈希、审批重放、TOCTOU、原子写与回滚、授权粒度。
@@ -134,25 +134,27 @@
 
 ## 7. P5：pytest 反馈与自动修复循环
 
-1. **解决的问题**：把已实现的 run_tests 接入图，让测试结果驱动有限重规划，并用累计 Git Diff 生成最终报告。
+1. **解决的问题**：在成功 Apply 后接入固定 PytestRunner，让 exit code 驱动有限修复循环，并以状态机证据生成确定性 Review 和 Final Report。
 2. **KamaClaude 对应阶段**：S3 Task planning、S5 失败分类/重试、S6 输出治理；原项目没有同等“Patch-测试-再审批”完整产品循环。
 3. **必读课程**：`05-s3-planning.md`、`08-s5-tool-safety.md` 重试部分、`09-s6-context.md` 输出截断、`11-technical-highlights.md`。
 4. **必读源码**：`core/task/manager.py`、`core/tools/invocation.py`、`core/compact/budget.py`、`core/runner.py`；测试 `test_task_manager.py`、`test_tool_retry.py`、`test_budget.py`、`test_run_e2e.py`。
-5. **实现功能**：tester node、TestResult 分类、test_router、retry_count/max_retries、失败摘要注入 planner、累计 Diff reviewer、Python 锁定事实的最终报告；可由 LLM 生成说明，失败时回退确定性模板。
+5. **实现功能**：tester node、TestOutcome/TestRunRecord、`repair_attempts/max_repair_attempts`、失败 ToolMessage 回填、确定性 reviewer 和确定性 Final Report；本阶段没有 Planner、Git Diff reviewer 或 LLM 报告器。
 6. **允许修改目录**：`agent/`、`services/`、`schemas/`、`prompts/`、API state projection、相关测试/docs。
 7. **禁止实现**：无限 retry、失败后自动写而不审批、自动 pip install、任意 shell、baseline 大型测试系统、LLM reviewer/subagent、SQLite。
 8. **输入/输出**：输入已批准并应用的 Patch；输出 TestResult、可能的新 ApprovalRequest、ReviewResult、FinalReport。
 9. **验收场景**：一次通过；第一次失败后重规划并再次审批、第二次通过；重试耗尽；collection/timeout 被判不可自动修复；拒绝第二次 Patch 后保留清晰报告。
-10. **必须测试**：三路 router、retry off-by-one、每轮新 patch_hash、失败摘要限长、不可重试错误、累计 Diff、冲突标记/越界文件审查、最终报告字段完整。
-11. **必须理解**：业务重试与基础设施重试、测试 oracle、replan vs retry、循环终止、累计/增量 Diff、自动修复的停止条件。
+10. **必须测试**：固定命令/环境、exit code 0–6/未知值、timeout/output limit、预算 off-by-one、每轮新 patch hash/审批、失败摘要脱敏、不可重试错误、Reviewer 证据和最终报告字段。
+11. **必须理解**：代码失败与基础设施失败、测试 oracle、修复循环终止、当前文件上的增量 Patch、两个独立预算和确定性审查。
 12. **亲手复写**：test_router 和错误分类映射；用表驱动测试覆盖所有 `(result,retry_count)` 组合。
-13. **主动修改练习**：把默认 max_retries 从 1 改为 0，通过测试证明系统退化为“一次修改、失败即报告”而不是路由错误。
+13. **主动修改练习**：在安全 allowlist 下研究“仅重跑上次失败测试”，但最终仍必须运行全量固定套件；不得把模型文字拼入 pytest 参数。
 14. **故障注入练习**：让 pytest 返回 collection error 或超时，证明不会把环境问题当成代码断言失败反复改源码。
 15. **预计代码量**：产品 190–280 行；测试 210–320 行。
 16. **预计学习时间**：快速实现 2–3 小时；完整学习 6–8 小时。
 17. **面试题范围**：自动修复循环、测试反馈、重试预算、错误归因、Diff reviewer、最终报告可解释性。
 
 **阶段出口**：P5 形成一天 Demo。只演示和报告，不自动进入持久化阶段。
+
+**当前实施记录**：P5 已完成。生产固定命令为当前解释器执行 `-m pytest -q --tb=short <configured-relative-target>`；默认目标 `tests`，默认修复上限 3、系统最大 5。只有 exit code 1 可以在两个预算均剩余时回模型，每份新 Patch 都重新审批。当前仍使用 `InMemorySaver`，P6 尚未开始。
 
 ## 8. P6：Session、SQLite、上下文与 Trace
 

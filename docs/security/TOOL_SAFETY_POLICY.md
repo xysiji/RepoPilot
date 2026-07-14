@@ -76,14 +76,43 @@ Phase 说明失败发生在哪一步，Category 用于聚合，Code 用于稳定
 
 所有工具失败都编码为固定 `success/data/error` JSON，并以相同 `tool_call_id` 的 `ToolMessage(status="error")` 回填模型。模型可以换安全路径或总结限制，但不能推翻 Policy。同轮第一个失败不阻止后续调用。
 
-## 13. 为什么 P3 没有人工审批
+## 13. P3 到 P4 的审批边界
 
-P3 只有只读工具。审批生命周期、暂停恢复、批准对象绑定和写入复核属于 P4；提前加入会把未完成的副作用语义混入当前安全基线。P3 对 `requires_approval=true` 直接稳定拒绝，不创建 pending 状态，也不调用 `interrupt()`。
+P3 只有只读工具，对副作用稳定拒绝。P4 仅新增一个 `propose_patch` write effect，并把裁决扩展为 `allow / require_approval / deny`。参数错误仍直接回填模型；只有合法、边界内、可完整生成 Diff 的单文件提案才创建 pending approval。
 
-## 14. P4 接入点
+## 14. P4 已实现的接入点
 
-P4 应在已校验参数和静态 Policy 之后、任何副作用执行之前加入 Approval。批准必须绑定具体 Patch/hash/preimage，而不是仅绑定工具名。P4 不能削弱 P3 WorkspaceGuard、effect classification、失败 Envelope 或 ToolMessage 配对。
+执行顺序为 Dispatch → Validation → Policy → Proposal Preparation → Approval interrupt → Apply/Reject → ToolMessage。Policy 不生成 Proposal、不调用 interrupt、不写文件。Approval Node 不写文件且恢复时只重建相同 payload。Apply Node 重新验证 workspace、链接、original/proposed SHA-256、完整 Diff 与行数绑定后才原子替换。
 
-## 15. 当前未解决的边界
+## 15. P4 安全不变量
+
+- 模型没有 `write_file` 或 `apply_patch` 工具；`propose_patch` 的函数体也不写文件。
+- 一个含 patch 的 AIMessage 必须只有一个调用；混合/双 patch 整批返回 `approval_batch_not_supported`。
+- API 只接受 proposal_id、approve/reject 和限长 comment，不接受 new_content、thread_id 或 State update。
+- Diff 完整且超限即拒绝；绝不批准截断 Diff。内部 proposed content 只存 checkpoint，不单独返回 API 或审计。
+- 等待期间文件变化返回 `stale_patch`；拒绝、非法决定、proposal mismatch 和重复 resume 都不会写入；同进程并发决定按 run 锁住完整“状态复核 + resume”临界区。
+- 临时文件与目标同目录，写入后 flush/fsync/close，再 `os.replace`；失败尽力清理，错误不暴露临时路径或裸异常。
+- 最后一个模型轮次提出 patch 时不启动审批，返回 `approval_not_started_budget_exhausted`。
+- P4 的 InMemorySaver 进程重启即丢失；P6 SQLite 也不能替代恢复时的外部状态复核。
+
+## 16. P5 固定 pytest 边界
+
+P5 只允许 `PytestRunner` 创建测试子进程，固定为当前项目解释器的绝对路径与参数序列 `-m pytest -q --tb=short <configured-relative-target>`。它使用 `asyncio.create_subprocess_exec`，不经过 shell，不接受模型/API 的 command、args、cwd、env、executable 或任意 timeout。
+
+测试目标先经过和文件工具相同的 workspace 相对路径规则及实际 resolve/link/containment 复核。cwd 固定为 workspace。环境采用 allowlist，只保留必要 Windows/临时目录变量并强制 UTF-8、禁 bytecode、禁 user site、禁 pytest plugin autoload；API Key、Provider Base URL、`PYTEST_ADDOPTS`、`PYTHONPATH` 和 RepoPilot 私密配置不继承。
+
+stdout/stderr 持续读取并共享硬字节预算；timeout 或 output limit 后终止、必要时 kill 并回收直接 pytest 子进程。输出再做 ANSI/control 清理、UTF-8 replacement、已知 SecretStr/常见 token、workspace/解释器路径替换与字符上限。该脱敏只是 best effort，恶意测试仍可能编码或拆分秘密。PytestRunner 也不是操作系统沙箱：测试代码拥有 RepoPilot 进程用户的文件系统和网络权限，P5 只能约束启动入口、参数、环境、时间与输出。
+
+## 17. P5 Apply、ToolMessage 与重试不变量
+
+- Approval payload 明示批准后会应用当前 Patch 并自动运行固定 pytest；不暴露绝对解释器、环境或可编辑参数。
+- Apply 成功只生成一次性 `applied_patch_context`，不立即回填成功 ToolMessage；Tester 实际运行一次后，以原 tool_call_id 生成该 Patch 唯一 ToolMessage。
+- reject、invalid、stale 和 Apply failure 仍立即生成 error ToolMessage，且不进入 Tester。
+- pytest exit code 由 Python 映射：只有 0 成功，只有 1 默认可进入代码修复循环；2–6、未知返回码、timeout、output limit、launch error 都是终态/基础设施结果。
+- `repair_attempts` 只在 Tester 实际启动时增加。只有 `test_failures`、修复预算剩余且模型预算剩余时才能回模型；Router 不修改计数。
+- 新 Patch 必须重新生成 proposal_id、重新 interrupt/审批、重新做 stale/hash 校验并重新测试；没有自动批准、相同测试自动重跑或失败 Patch 自动回滚。
+- Reviewer 是确定性 Python 证据校验器，不是语义代码审查器，也不调用第二个模型；只有最近 Patch hash、对应 pytest pass/exit 0 和状态一致时才能报告 repaired。
+
+## 16. 当前未解决的边界
 
 这不是操作系统沙箱。Agent 与 FastAPI 宿主进程拥有相同系统权限；Policy 只能降低误访问和模型诱导风险，不能防御被攻破的 Python 进程、内核/文件系统竞态或恶意依赖。策略检查与执行前复核缩小 TOCTOU 窗口，但不能提供原子文件系统保证。P3 也没有文件写入、命令执行、网络隔离、审批、持久状态或跨进程恢复。

@@ -6,6 +6,8 @@ from typing import Any
 from pydantic import AnyHttpUrl, Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from repopilot.tools.policy import WorkspacePolicyError, workspace_relative_parts
+
 
 class AppSettings(BaseSettings):
     """Validated RepoPilot settings with environment variable support."""
@@ -29,6 +31,10 @@ class AppSettings(BaseSettings):
     model_base_url: AnyHttpUrl | None = Field(default=None, exclude=True, repr=False)
     model_temperature: float = Field(default=0.0, ge=0.0, le=2.0)
     model_timeout_seconds: float = Field(default=30.0, gt=0.0, le=300.0)
+    pytest_target: str = "tests"
+    pytest_timeout_seconds: float = Field(default=60.0, ge=0.1, le=600.0)
+    pytest_max_output_characters: int = Field(default=20_000, ge=256, le=200_000)
+    max_repair_attempts: int = Field(default=3, ge=1, le=5)
 
     @field_validator("log_level")
     @classmethod
@@ -61,6 +67,17 @@ class AppSettings(BaseSettings):
         if isinstance(value, str) and not value.strip():
             return None
         return value
+
+    @field_validator("pytest_target")
+    @classmethod
+    def validate_pytest_target(cls, value: str) -> str:
+        try:
+            parts = workspace_relative_parts(value.strip())
+        except WorkspacePolicyError as exc:
+            raise ValueError("pytest_target must be a safe workspace-relative path") from exc
+        if not parts:
+            raise ValueError("pytest_target must identify a path below the workspace root")
+        return "/".join(parts)
 
     def safe_dump(self) -> dict[str, Any]:
         """Export non-sensitive settings for diagnostics."""

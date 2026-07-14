@@ -86,21 +86,23 @@
 
 | # | 概念题 | 源码题 | 设计取舍题 | 异常/安全/排错题 |
 | --- | --- | --- | --- | --- |
-| 1 | LangGraph interrupt/resume | 定位 approval node 与 API resume | interrupt vs 内存 Future | resume 时节点重放导致重复副作用 |
-| 2 | Patch hash 与授权绑定 | 定位 hash 生成和批准复核 | 批准工具名 vs 批准具体 Patch | 旧 hash、其他 thread、重复批准 |
-| 3 | preimage hash/乐观并发 | 定位 apply 前 workspace 五项复核 | 锁工作区 vs hash 检查 | 审批等待时人工改文件/HEAD |
-| 4 | unified diff 与 FileEdit | 定位 generate_patch 唯一匹配逻辑 | 模型直接生成 diff vs 结构化 edit | old snippet 重复/缺失/空 Patch |
-| 5 | 多文件写与回滚 | 定位预检、临时文件、os.replace | 真事务 vs best-effort rollback | 第二个文件写失败后的仓库状态 |
+| 1 | LangGraph interrupt/resume | 定位 ApprovalNode 与 API resume | interrupt vs 内存 Future | 节点重放为何不能在 interrupt 前写 |
+| 2 | Proposal、tool call 与 approval ID | 定位 ProposalBuilder/Service 校验 | 批准工具名 vs 批准具体内容 | 错 run/proposal、重复批准 |
+| 3 | 双 SHA-256 与 stale patch | 定位 apply 前 WorkspaceGuard/hash/Diff 复核 | 锁文件 vs乐观并发 | 等待时人工改文件或替换链接 |
+| 4 | 系统生成完整 unified diff | 定位 old/new content diff 与资源上限 | 模型 raw diff vs完整 new content | 截断 Diff、空修改、行数超限 |
+| 5 | 同目录原子替换 | 定位 temp/flush/close/os.replace/post hash | 单文件克制 vs多文件事务 | replace 失败清理、重启丢 pending |
 
 ## 10. P5 题目主题
 
 | # | 概念题 | 源码题 | 设计取舍题 | 异常/安全/排错题 |
 | --- | --- | --- | --- | --- |
-| 1 | pytest 作为反馈 oracle | 定位 tester node/TestResult | 跑全量 vs focused tests | 测试本身错误如何误导 Agent |
-| 2 | retry、replan 与 infrastructure retry | 定位 test_router 三路分支 | 为什么代码失败回 planner | assertion/collection/timeout 分类错误 |
-| 3 | max_retries 与终止证明 | 定位 retry_count writer/reader | 默认 0/1/2 的成本取舍 | off-by-one 导致多写一次 |
-| 4 | 增量 Patch 与累计 Diff | 定位每轮 Patch hash 和 reviewer | 每轮回滚 vs 累积修复 | 第二轮批准拒绝后的最终状态 |
-| 5 | deterministic final report | 定位 ReviewResult/FinalReport 生成 | 首版为何不用 LLM reviewer | Diff 越界、冲突标记、测试失败漏报 |
+| 1 | pytest exit code 作为 oracle | 定位 PytestRunner/TestOutcome | 固定全量 vs未来 allowlist focused tests | 把 no-tests/collection/timeout 当代码失败 |
+| 2 | 代码修复反馈与基础设施终态 | 定位 Tester/route_after_tester | 为什么只有 exit 1 回模型 | assertion/collection/unknown code 分类错误 |
+| 3 | 两个独立预算与终止证明 | 定位 model_calls/repair_attempts 的写入者和 Router | 默认 3、系统上限 5 的成本取舍 | off-by-one 导致额外 Apply/Test |
+| 4 | 每轮新 Patch 与重新审批 | 定位 ToolMessage、proposal ID、hash 和 interrupt | 失败 Patch 不回滚 vs事务回滚 | 自动批准第二份 Patch、重复 resume 重跑测试 |
+| 5 | deterministic Review/Final Report | 定位 Reviewer/FinalReportBuilder | 首版为何不用 LLM Reviewer/Subgraph | hash/测试 ID 不一致、模型放弃却误报成功 |
+
+P5 面试还必须覆盖参数序列与 `shell=False`、最小环境、timeout/kill/reap、共享输出上限、best-effort 脱敏、pytest 非沙箱、Apply 成功 ToolMessage 时点变化，以及 P6 才解决的持久恢复限制。
 
 ## 11. P6 题目主题
 

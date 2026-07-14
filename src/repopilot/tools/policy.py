@@ -1,4 +1,4 @@
-"""Pure Python P3 tool and workspace safety policy."""
+"""Pure Python tool-effect and workspace safety policy."""
 
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ from repopilot.tools.contracts import (
     ToolExecutionPhase,
     ToolFailure,
     ToolFailureCategory,
+    ToolPolicyAction,
     ToolPolicyDecision,
 )
 
@@ -22,7 +23,10 @@ PRODUCTION_TOOL_EFFECTS: Mapping[str, ToolEffect] = {
     "list_files": ToolEffect.READ_ONLY,
     "read_file": ToolEffect.READ_ONLY,
     "search_code": ToolEffect.READ_ONLY,
+    "propose_patch": ToolEffect.WRITE,
 }
+
+_APPROVAL_TOOLS = frozenset({"propose_patch"})
 
 _EXCLUDED_DIRECTORIES = frozenset({".git", ".venv", "__pycache__"})
 _PRIVATE_KEY_PREFIXES = ("id_rsa", "id_ed25519")
@@ -96,33 +100,7 @@ class WorkspaceGuard:
         return path.relative_to(self.root).as_posix()
 
     def _lexical_parts(self, raw_path: str) -> tuple[str, ...]:
-        if not isinstance(raw_path, str) or not raw_path or "\x00" in raw_path:
-            raise WorkspacePolicyError(ToolErrorCode.INVALID_PATH)
-
-        normalized = raw_path.replace("\\", "/")
-        lowered = normalized.casefold()
-        if lowered.startswith("//?/") or lowered.startswith("//./"):
-            raise WorkspacePolicyError(ToolErrorCode.WINDOWS_DEVICE_PATH_DENIED)
-        if normalized.startswith("//"):
-            raise WorkspacePolicyError(ToolErrorCode.ABSOLUTE_PATH_DENIED)
-        if normalized.startswith("/") or _WINDOWS_DRIVE.match(normalized):
-            raise WorkspacePolicyError(ToolErrorCode.ABSOLUTE_PATH_DENIED)
-        if ":" in normalized:
-            raise WorkspacePolicyError(ToolErrorCode.SENSITIVE_PATH_DENIED)
-
-        raw_parts = normalized.split("/")
-        if any(part == ".." for part in raw_parts):
-            raise WorkspacePolicyError(ToolErrorCode.PATH_TRAVERSAL_DENIED)
-        parts = tuple(part for part in raw_parts if part not in {"", "."})
-        for part in parts:
-            if part.endswith((" ", ".")):
-                raise WorkspacePolicyError(ToolErrorCode.INVALID_PATH)
-            stem = part.split(".", maxsplit=1)[0].upper()
-            if stem in _RESERVED_WINDOWS_NAMES:
-                raise WorkspacePolicyError(ToolErrorCode.WINDOWS_DEVICE_PATH_DENIED)
-            if _is_sensitive_name(part):
-                raise WorkspacePolicyError(ToolErrorCode.SENSITIVE_PATH_DENIED)
-        return parts
+        return workspace_relative_parts(raw_path)
 
     def _reject_links(self, candidate: Path, parts: tuple[str, ...]) -> None:
         current = self.root
@@ -159,6 +137,38 @@ def _is_sensitive_name(name: str) -> bool:
     return Path(lowered).suffix in _PRIVATE_KEY_SUFFIXES
 
 
+def workspace_relative_parts(raw_path: str) -> tuple[str, ...]:
+    """Validate one cross-platform workspace-relative path without touching disk."""
+
+    if not isinstance(raw_path, str) or not raw_path or "\x00" in raw_path:
+        raise WorkspacePolicyError(ToolErrorCode.INVALID_PATH)
+
+    normalized = raw_path.replace("\\", "/")
+    lowered = normalized.casefold()
+    if lowered.startswith("//?/") or lowered.startswith("//./"):
+        raise WorkspacePolicyError(ToolErrorCode.WINDOWS_DEVICE_PATH_DENIED)
+    if normalized.startswith("//"):
+        raise WorkspacePolicyError(ToolErrorCode.ABSOLUTE_PATH_DENIED)
+    if normalized.startswith("/") or _WINDOWS_DRIVE.match(normalized):
+        raise WorkspacePolicyError(ToolErrorCode.ABSOLUTE_PATH_DENIED)
+    if ":" in normalized:
+        raise WorkspacePolicyError(ToolErrorCode.SENSITIVE_PATH_DENIED)
+
+    raw_parts = normalized.split("/")
+    if any(part == ".." for part in raw_parts):
+        raise WorkspacePolicyError(ToolErrorCode.PATH_TRAVERSAL_DENIED)
+    parts = tuple(part for part in raw_parts if part not in {"", "."})
+    for part in parts:
+        if part.endswith((" ", ".")):
+            raise WorkspacePolicyError(ToolErrorCode.INVALID_PATH)
+        stem = part.split(".", maxsplit=1)[0].upper()
+        if stem in _RESERVED_WINDOWS_NAMES:
+            raise WorkspacePolicyError(ToolErrorCode.WINDOWS_DEVICE_PATH_DENIED)
+        if _is_sensitive_name(part):
+            raise WorkspacePolicyError(ToolErrorCode.SENSITIVE_PATH_DENIED)
+    return parts
+
+
 class ToolSafetyPolicy:
     """Fail-closed effect and workspace policy with no model or state dependencies."""
 
@@ -175,16 +185,20 @@ class ToolSafetyPolicy:
         if effect is ToolEffect.UNKNOWN:
             return _denied_decision(
                 effect=effect,
-                requires_approval=False,
                 code=ToolErrorCode.UNCLASSIFIED_TOOL_EFFECT,
                 message="The requested tool has no trusted effect classification.",
             )
-        if effect in {ToolEffect.WRITE, ToolEffect.COMMAND}:
+        if effect is ToolEffect.COMMAND:
             return _denied_decision(
                 effect=effect,
-                requires_approval=True,
                 code=ToolErrorCode.SIDE_EFFECT_NOT_SUPPORTED,
-                message="Tools with side effects are not supported in this stage.",
+                message="Command tools are not supported.",
+            )
+        if effect is ToolEffect.WRITE and tool_name not in _APPROVAL_TOOLS:
+            return _denied_decision(
+                effect=effect,
+                code=ToolErrorCode.SIDE_EFFECT_NOT_SUPPORTED,
+                message="This write capability is not registered for human approval.",
             )
 
         arguments = validated_args.model_dump()
@@ -195,11 +209,19 @@ class ToolSafetyPolicy:
             except WorkspacePolicyError as exc:
                 return _denied_decision(
                     effect=effect,
-                    requires_approval=False,
                     code=exc.code,
                     message=_safe_path_message(exc.code),
                 )
+        if effect is ToolEffect.WRITE:
+            return ToolPolicyDecision(
+                action=ToolPolicyAction.REQUIRE_APPROVAL,
+                allowed=False,
+                effect=effect,
+                requires_approval=True,
+                failure=None,
+            )
         return ToolPolicyDecision(
+            action=ToolPolicyAction.ALLOW,
             allowed=True,
             effect=effect,
             requires_approval=False,
@@ -210,14 +232,14 @@ class ToolSafetyPolicy:
 def _denied_decision(
     *,
     effect: ToolEffect,
-    requires_approval: bool,
     code: ToolErrorCode,
     message: str,
 ) -> ToolPolicyDecision:
     return ToolPolicyDecision(
+        action=ToolPolicyAction.DENY,
         allowed=False,
         effect=effect,
-        requires_approval=requires_approval,
+        requires_approval=False,
         failure=ToolFailure(
             phase=ToolExecutionPhase.POLICY,
             category=ToolFailureCategory.POLICY_DENIED,

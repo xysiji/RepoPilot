@@ -1,4 +1,4 @@
-"""Strict P3 dispatch, validation, policy, execution, and normalization pipeline."""
+"""Strict dispatch, validation, policy, execution, and proposal pipeline."""
 
 from __future__ import annotations
 
@@ -10,6 +10,11 @@ from langchain_core.messages import ToolMessage
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ValidationError
 
+from repopilot.patching.proposal import (
+    PatchPreparationError,
+    PatchProposal,
+    PatchProposalBuilder,
+)
 from repopilot.tools.contracts import (
     ResourceLimitExceededError,
     ToolEffect,
@@ -18,6 +23,7 @@ from repopilot.tools.contracts import (
     ToolExecutionRecord,
     ToolFailure,
     ToolFailureCategory,
+    ToolPolicyAction,
     ToolPolicyDecision,
     ToolResultEnvelope,
     failed_result,
@@ -31,19 +37,26 @@ class SafetyPolicy(Protocol):
 
 @dataclass(frozen=True)
 class SafeToolExecution:
-    tool_message: ToolMessage
-    record: ToolExecutionRecord
+    tool_message: ToolMessage | None
+    record: ToolExecutionRecord | None
+    proposal: PatchProposal | None = None
 
 
 class SafeToolExecutor:
     """Execute each call at most once after validation and fail-closed policy approval."""
 
-    def __init__(self, tools: Sequence[BaseTool], policy: SafetyPolicy) -> None:
+    def __init__(
+        self,
+        tools: Sequence[BaseTool],
+        policy: SafetyPolicy,
+        proposal_builder: PatchProposalBuilder | None = None,
+    ) -> None:
         tool_list = list(tools)
         self._tools = {tool.name: tool for tool in tool_list}
         if len(self._tools) != len(tool_list):
             raise ValueError("tool names must be unique")
         self._policy = policy
+        self._proposal_builder = proposal_builder
 
     def execute(
         self,
@@ -135,7 +148,7 @@ class SafeToolExecutor:
                 policy_allowed=False,
             )
 
-        if not decision.allowed:
+        if decision.action is ToolPolicyAction.DENY:
             failure = decision.failure or ToolFailure(
                 phase=ToolExecutionPhase.POLICY,
                 category=ToolFailureCategory.INTERNAL_FAILURE,
@@ -153,21 +166,66 @@ class SafeToolExecutor:
                 policy_allowed=False,
             )
 
-        if decision.effect is not ToolEffect.READ_ONLY or decision.requires_approval:
-            envelope = failed_result(
-                phase=ToolExecutionPhase.POLICY,
-                category=ToolFailureCategory.POLICY_DENIED,
-                code=ToolErrorCode.SIDE_EFFECT_NOT_SUPPORTED,
-                message="Tools requiring approval are not supported in this stage.",
-            )
-            return self._finalize(
+        if decision.action is ToolPolicyAction.REQUIRE_APPROVAL:
+            if (
+                decision.effect is not ToolEffect.WRITE
+                or tool_name != "propose_patch"
+                or self._proposal_builder is None
+            ):
+                return self.failure(
+                    model_call=model_call,
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    tool_input=tool_input,
+                    phase=ToolExecutionPhase.POLICY,
+                    category=ToolFailureCategory.POLICY_DENIED,
+                    code=ToolErrorCode.SIDE_EFFECT_NOT_SUPPORTED,
+                    message="This approval-required tool is not supported.",
+                    effect=decision.effect,
+                )
+            try:
+                proposal = self._proposal_builder.build(
+                    tool_call_id=tool_call_id,
+                    **validated_args.model_dump(),
+                )
+            except PatchPreparationError as exc:
+                return self._finalize(
+                    model_call=model_call,
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    safe_input=safe_input,
+                    envelope=ToolResultEnvelope(success=False, data=None, error=exc.failure),
+                    effect=decision.effect,
+                    policy_allowed=False,
+                )
+            except Exception:
+                return self.failure(
+                    model_call=model_call,
+                    tool_name=tool_name,
+                    tool_call_id=tool_call_id,
+                    tool_input=tool_input,
+                    phase=ToolExecutionPhase.PREPARATION,
+                    category=ToolFailureCategory.INTERNAL_FAILURE,
+                    code=ToolErrorCode.PATCH_TARGET_NOT_SUPPORTED,
+                    message="The patch proposal could not be prepared safely.",
+                    effect=decision.effect,
+                )
+            return SafeToolExecution(tool_message=None, record=None, proposal=proposal)
+
+        if (
+            decision.action is not ToolPolicyAction.ALLOW
+            or decision.effect is not ToolEffect.READ_ONLY
+        ):
+            return self.failure(
                 model_call=model_call,
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
-                safe_input=safe_input,
-                envelope=envelope,
+                tool_input=tool_input,
+                phase=ToolExecutionPhase.POLICY,
+                category=ToolFailureCategory.INTERNAL_FAILURE,
+                code=ToolErrorCode.UNCLASSIFIED_TOOL_EFFECT,
+                message="The tool safety policy returned an inconsistent action.",
                 effect=decision.effect,
-                policy_allowed=False,
             )
 
         try:
@@ -239,6 +297,32 @@ class SafeToolExecutor:
             policy_allowed=True,
         )
 
+    def failure(
+        self,
+        *,
+        model_call: int,
+        tool_name: str,
+        tool_call_id: str,
+        tool_input: Mapping[str, Any],
+        phase: ToolExecutionPhase,
+        category: ToolFailureCategory,
+        code: ToolErrorCode,
+        message: str,
+        effect: ToolEffect = ToolEffect.UNKNOWN,
+    ) -> SafeToolExecution:
+        """Build one stable ToolMessage for a graph-level rejection."""
+
+        envelope = failed_result(phase=phase, category=category, code=code, message=message)
+        return self._finalize(
+            model_call=model_call,
+            tool_name=tool_name,
+            tool_call_id=tool_call_id,
+            safe_input={"field_count": len(tool_input)},
+            envelope=envelope,
+            effect=effect,
+            policy_allowed=False,
+        )
+
     @staticmethod
     def _finalize(
         *,
@@ -276,6 +360,7 @@ class SafeToolExecutor:
                 effect=effect,
                 policy_allowed=policy_allowed,
             ),
+            proposal=None,
         )
 
 

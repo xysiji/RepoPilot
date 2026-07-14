@@ -1,4 +1,4 @@
-"""Stable contracts for P3 tool validation, policy, execution, and auditing."""
+"""Stable contracts for tool validation, policy, execution, and auditing."""
 
 from __future__ import annotations
 
@@ -19,6 +19,14 @@ class ToolEffect(StrEnum):
     UNKNOWN = "unknown"
 
 
+class ToolPolicyAction(StrEnum):
+    """Trusted three-way policy action decided by Python code."""
+
+    ALLOW = "allow"
+    REQUIRE_APPROVAL = "require_approval"
+    DENY = "deny"
+
+
 class ToolExecutionPhase(StrEnum):
     """The pipeline phase that completed or produced a failure."""
 
@@ -27,6 +35,13 @@ class ToolExecutionPhase(StrEnum):
     POLICY = "policy"
     EXECUTION = "execution"
     NORMALIZATION = "normalization"
+    PREPARATION = "preparation"
+    APPROVAL = "approval"
+    APPLY = "apply"
+    VERIFICATION = "verification"
+    TESTING = "testing"
+    REVIEW = "review"
+    REPORT = "report"
 
 
 class ToolFailureCategory(StrEnum):
@@ -39,6 +54,13 @@ class ToolFailureCategory(StrEnum):
     RESOURCE_LIMIT = "resource_limit"
     EXECUTION_FAILURE = "execution_failure"
     INTERNAL_FAILURE = "internal_failure"
+    APPROVAL = "approval"
+    CONFLICT = "conflict"
+    PATCH = "patch"
+    TEST_FAILURE = "test_failure"
+    TEST_INFRASTRUCTURE = "test_infrastructure"
+    REPAIR_BUDGET = "repair_budget"
+    REVIEW = "review"
 
 
 class ToolErrorCode(StrEnum):
@@ -64,6 +86,39 @@ class ToolErrorCode(StrEnum):
     RESOURCE_LIMIT_EXCEEDED = "resource_limit_exceeded"
     TOOL_EXECUTION_ERROR = "tool_execution_error"
     INVALID_TOOL_RESULT = "invalid_tool_result"
+    APPROVAL_REQUIRED = "approval_required"
+    APPROVAL_REJECTED = "approval_rejected"
+    APPROVAL_BATCH_NOT_SUPPORTED = "approval_batch_not_supported"
+    APPROVAL_NOT_STARTED_BUDGET_EXHAUSTED = "approval_not_started_budget_exhausted"
+    INVALID_APPROVAL_DECISION = "invalid_approval_decision"
+    PROPOSAL_MISMATCH = "proposal_mismatch"
+    NO_PENDING_APPROVAL = "no_pending_approval"
+    RUN_NOT_FOUND = "run_not_found"
+    RUN_ALREADY_COMPLETED = "run_already_completed"
+    PATCH_EMPTY = "patch_empty"
+    PATCH_SOURCE_TOO_LARGE = "patch_source_too_large"
+    PATCH_PROPOSED_CONTENT_TOO_LARGE = "patch_proposed_content_too_large"
+    PATCH_DIFF_TOO_LARGE = "patch_diff_too_large"
+    PATCH_CHANGED_LINES_EXCEEDED = "patch_changed_lines_exceeded"
+    PATCH_TARGET_NOT_SUPPORTED = "patch_target_not_supported"
+    PATCH_FILE_CREATION_NOT_SUPPORTED = "patch_file_creation_not_supported"
+    STALE_PATCH = "stale_patch"
+    PATCH_APPLY_FAILED = "patch_apply_failed"
+    PATCH_VERIFICATION_FAILED = "patch_verification_failed"
+    PYTEST_TESTS_FAILED = "pytest_tests_failed"
+    PYTEST_INTERRUPTED = "pytest_interrupted"
+    PYTEST_INTERNAL_ERROR = "pytest_internal_error"
+    PYTEST_USAGE_ERROR = "pytest_usage_error"
+    PYTEST_NO_TESTS_COLLECTED = "pytest_no_tests_collected"
+    PYTEST_WARNINGS_EXCEEDED = "pytest_warnings_exceeded"
+    PYTEST_TIMEOUT = "pytest_timeout"
+    PYTEST_OUTPUT_LIMIT_EXCEEDED = "pytest_output_limit_exceeded"
+    PYTEST_LAUNCH_ERROR = "pytest_launch_error"
+    PYTEST_UNKNOWN_EXIT_CODE = "pytest_unknown_exit_code"
+    REPAIR_ATTEMPTS_EXHAUSTED = "repair_attempts_exhausted"
+    REPAIR_ABANDONED = "repair_abandoned"
+    REVIEW_FAILED = "review_failed"
+    TEST_RESULT_MISMATCH = "test_result_mismatch"
 
 
 @dataclass(frozen=True)
@@ -80,6 +135,12 @@ class ToolLimits:
     max_search_line_characters: int = 500
     max_query_length: int = 200
     max_suffix_length: int = 20
+    max_patch_source_characters: int = 100_000
+    max_patch_proposed_characters: int = 100_000
+    max_patch_diff_characters: int = 200_000
+    max_patch_changed_lines: int = 2_000
+    max_patch_rationale_characters: int = 1_000
+    max_approval_comment_characters: int = 1_000
 
 
 TOOL_LIMITS = ToolLimits()
@@ -134,6 +195,30 @@ class SearchCodeArgs(ToolArgsModel):
         return normalized.casefold()
 
 
+class ProposePatchInput(BaseModel):
+    """Model input for one reviewable full-content replacement proposal."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=False)
+
+    path: str = Field(min_length=1, max_length=TOOL_LIMITS.max_path_length)
+    new_content: str = Field(max_length=TOOL_LIMITS.max_patch_proposed_characters)
+    rationale: str = Field(min_length=1, max_length=TOOL_LIMITS.max_patch_rationale_characters)
+
+    @field_validator("path", "new_content", "rationale")
+    @classmethod
+    def reject_nul(cls, value: str) -> str:
+        if "\x00" in value:
+            raise ValueError("NUL is not allowed")
+        return value
+
+    @field_validator("path", "rationale")
+    @classmethod
+    def require_non_whitespace_text(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("value must contain non-whitespace text")
+        return value
+
+
 class SearchMatch(BaseModel):
     path: str
     line_number: int
@@ -177,10 +262,36 @@ class ToolResultEnvelope(BaseModel):
 class ToolPolicyDecision(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    action: ToolPolicyAction | None = None
     allowed: bool
     effect: ToolEffect
     requires_approval: bool
     failure: ToolFailure | None = None
+
+    @model_validator(mode="after")
+    def derive_and_validate_action(self) -> Self:
+        action = self.action
+        if action is None:
+            action = (
+                ToolPolicyAction.REQUIRE_APPROVAL
+                if self.requires_approval
+                else ToolPolicyAction.ALLOW
+                if self.allowed
+                else ToolPolicyAction.DENY
+            )
+            object.__setattr__(self, "action", action)
+        expected = {
+            ToolPolicyAction.ALLOW: (True, False),
+            ToolPolicyAction.REQUIRE_APPROVAL: (False, True),
+            ToolPolicyAction.DENY: (False, False),
+        }[action]
+        if (self.allowed, self.requires_approval) != expected:
+            raise ValueError("policy compatibility fields do not match action")
+        if action is ToolPolicyAction.DENY and self.failure is None:
+            raise ValueError("denied policy decisions require a failure")
+        if action is not ToolPolicyAction.DENY and self.failure is not None:
+            raise ValueError("non-denied policy decisions cannot include a failure")
+        return self
 
 
 class ToolExecutionRecord(BaseModel):

@@ -86,7 +86,7 @@ def test_tool_node_executes_all_calls_in_order_and_preserves_ids(tmp_path: Path)
     update = _tool_node(tmp_path)(state)
 
     assert [message.tool_call_id for message in update["messages"]] == ["first", "second"]
-    assert [record.tool_call_id for record in update["tool_executions"]] == [
+    assert [record["tool_call_id"] for record in update["tool_executions"]] == [
         "first",
         "second",
     ]
@@ -117,7 +117,7 @@ def test_tool_node_returns_stable_unknown_validation_and_exception_errors(
 
     update = _tool_node(tmp_path, broken_tool)(state)
 
-    assert [record.error_type for record in update["tool_executions"]] == [
+    assert [record["error_type"] for record in update["tool_executions"]] == [
         "unknown_tool",
         "invalid_arguments",
         "tool_execution_error",
@@ -143,7 +143,7 @@ def test_failed_tool_does_not_prevent_later_structured_result(tmp_path: Path) ->
 
     update = _tool_node(tmp_path)(state)
 
-    assert [record.success for record in update["tool_executions"]] == [False, True]
+    assert [record["success"] for record in update["tool_executions"]] == [False, True]
     assert [message.tool_call_id for message in update["messages"]] == ["missing", "ok"]
 
 

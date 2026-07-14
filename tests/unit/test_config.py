@@ -26,6 +26,8 @@ def test_non_sensitive_defaults_are_available() -> None:
     assert settings.app_env == "development"
     assert settings.log_level == "INFO"
     assert settings.model_api_key is None
+    assert settings.pytest_target == "tests"
+    assert settings.max_repair_attempts == 3
 
 
 def test_environment_variables_override_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -91,5 +93,27 @@ def test_safe_dump_and_json_do_not_expose_sensitive_values() -> None:
     ],
 )
 def test_invalid_model_limits_are_rejected(field: str, value: float) -> None:
+    with pytest.raises(ValidationError):
+        AppSettings(**{field: value}, _env_file=None)
+
+
+@pytest.mark.parametrize("target", ["", ".", "../tests", "C:\\tests", ".env", "/tests"])
+def test_pytest_target_must_be_a_safe_relative_workspace_path(target: str) -> None:
+    with pytest.raises(ValidationError):
+        AppSettings(pytest_target=target, _env_file=None)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("pytest_timeout_seconds", 0),
+        ("pytest_timeout_seconds", 601),
+        ("pytest_max_output_characters", 255),
+        ("pytest_max_output_characters", 200_001),
+        ("max_repair_attempts", 0),
+        ("max_repair_attempts", 6),
+    ],
+)
+def test_invalid_test_runner_limits_are_rejected(field: str, value: float) -> None:
     with pytest.raises(ValidationError):
         AppSettings(**{field: value}, _env_file=None)

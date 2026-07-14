@@ -7,7 +7,9 @@ from typing import Any
 import pytest
 from langchain_core.tools import StructuredTool
 
+from repopilot.patching.proposal import PatchProposalBuilder
 from repopilot.tools.contracts import (
+    ProposePatchInput,
     ReadFileArgs,
     ResourceLimitExceededError,
     ToolEffect,
@@ -213,3 +215,39 @@ def test_invalid_tool_result_stops_at_normalization_without_breaking_protocol(
     assert result.record.error_code == "invalid_tool_result"
     assert result.tool_message.status == "error"
     assert json.loads(str(result.tool_message.content))["error"]["code"] == "invalid_tool_result"
+
+
+def test_approval_action_prepares_proposal_without_invoking_tool_function(tmp_path: Path) -> None:
+    target = tmp_path / "a.py"
+    target.write_bytes(b"old\n")
+    calls = 0
+
+    def forbidden_write(path: str, new_content: str, rationale: str) -> str:
+        nonlocal calls
+        calls += 1
+        target.write_text(new_content, encoding="utf-8")
+        return rationale + path
+
+    tool = StructuredTool.from_function(
+        func=forbidden_write,
+        name="propose_patch",
+        description="test proposal tool",
+        args_schema=ProposePatchInput,
+    )
+    guard = WorkspaceGuard(tmp_path)
+    executor = SafeToolExecutor(
+        [tool],
+        ToolSafetyPolicy(guard),
+        PatchProposalBuilder(guard),
+    )
+
+    result = _execute(
+        executor,
+        "propose_patch",
+        {"path": "a.py", "new_content": "new\n", "rationale": "change"},
+    )
+
+    assert calls == 0
+    assert target.read_bytes() == b"old\n"
+    assert result.proposal is not None
+    assert result.tool_message is None and result.record is None

@@ -17,14 +17,14 @@
 | 5 | ExecutionContext | `agent/state.py` | 使用框架替换 | LangGraph State/reducers | P2 已实现最小显式状态 |
 | 6 | ToolRegistry | `tools/readonly.py` + 自定义 ToolNode | 修改后迁移 | LangChain BaseTool；不采用预构建 ToolNode | P2 保留顺序和审计语义 |
 | 7 | 文件读取工具 | `tools/read_file.py` | 修改后迁移 | LangChain tool schema | 保留 |
-| 8 | 文件写入工具 | `services/patch_applier.py` | 第一版删除通用工具；改为专用能力 | 无 | 仅保留 apply_patch |
+| 8 | 文件写入工具 | `patching/proposal.py` + `patching/applicator.py` | 第一版删除通用工具；独立实现专用能力 | interrupt 仅负责暂停 | P4 已保留单文件受批写入 |
 | 9 | Bash 工具 | 固定 `run_tests`/Git 服务 | 第一版删除 | 无 | 不保留通用 shell |
 | 10 | TaskManager | 后续 State 中的 `ExecutionPlan` | 后续阶段再实现 | LangGraph State/checkpoint | P2 不迁移 |
 | 11 | EventBus | graph updates/trace state | 第一版删除 | LangGraph stream/callback | 不保留 |
 | 12 | EventWriter | checkpoint + trace_events | 第一版删除 | LangGraph persistence | 不保留 JSONL writer |
 | 13 | TraceWriter | P6 trace adapter | 后续阶段再实现 | LangSmith 可选 + State trace | 部分保留 |
-| 14 | Permission Policy | `services/approval_policy.py` | 修改后迁移 | 无 | 保留专用策略 |
-| 15 | PermissionManager | approval node/API | 修改后迁移 | LangGraph interrupt | 保留能力 |
+| 14 | Permission Policy | `tools/policy.py` | 修改后迁移 | 无 | P4 已实现三态专用策略 |
+| 15 | PermissionManager | approval node/API | 修改后迁移 | LangGraph interrupt | P4 已替换 Future 等待 |
 | 16 | Session Store | SQLite Checkpointer | 使用框架替换 | LangGraph persistence | P6 保留 |
 | 17 | Notes/Context | 项目规则与上下文装配 | 后续阶段再实现 | prompt/context 管理 | P6 最小保留 |
 | 18 | Context Compact | 预算与摘要策略 | 后续阶段再实现 | LangChain message utilities | P6 最小保留 |
@@ -119,18 +119,18 @@
 
 - **原项目解决的问题**：`src/kama_claude/core/tools/builtin/write_file.py` 写/覆盖文本、创建父目录、限制 1 MB，并由 PermissionManager 审批。
 - **新项目仍有的问题**：需要修改文件，但必须让用户先看到精确 Patch。
-- **处理方式**：**第一版删除通用写工具**；用专用、程序化 `apply_patch` 修改后替代。
-- **复用代码或设计**：只复用内容大小限制、UTF-8 和错误结果思路；新实现增加 preimage hash、全部预检、临时文件和回滚。
+- **处理方式**：**第一版删除通用写工具**；P4 用模型可见但不写入的 `propose_patch` 与节点专用 `PatchApplicator` 替代。
+- **复用代码或设计**：只复用内容大小限制、UTF-8 和错误结果思路；P4 独立实现双哈希、完整 Diff、审批后复核和同目录原子替换，不实现自动回滚。
 - **框架能力**：approval 由 LangGraph interrupt；写入逻辑不由 LangChain 替代。
 - **放弃原因**：通用 write_file 允许模型在审批后重写任意内容，审批对象与实际副作用难绑定。
-- **失去能力**：模型不能自由创建任意文件或覆盖全文；不支持二进制、rename/chmod。
+- **失去能力**：模型不能创建、删除或重命名文件；P4 只支持一个既有普通文本文件的完整内容替换，不支持二进制和批量 Patch。
 - **面试追问**：为什么批准工具名不等于批准内容？如何防 TOCTOU？多文件写如何处理半失败？
 
 ### 9. Bash 工具
 
 - **原项目解决的问题**：`src/kama_claude/core/tools/builtin/bash.py` 执行任意 shell、超时、合并输出；权限策略用正则判断危险命令。
-- **新项目仍有的问题**：只需要运行 pytest 和读取 Git Diff。
-- **处理方式**：**第一版删除**通用 Bash，改为固定参数的 `run_tests` 和 Git 服务。
+- **新项目仍有的问题**：P5 只需要运行固定 pytest；Git Diff 仍是后续独立只读能力。
+- **处理方式**：**第一版删除**通用 Bash；P5 已实现内部固定 `PytestRunner`，它不是模型工具或 API 命令入口。
 - **复用代码或设计**：复用 subprocess 超时、kill/reap、输出上限和非零退出分类的测试思路。
 - **框架能力**：无；使用 `create_subprocess_exec` 的确定性 Python 逻辑。
 - **放弃原因**：命令字符串正则无法可靠建立安全边界，`shell=True` 存在注入和平台差异。
@@ -336,3 +336,22 @@
 - `WorkspaceGuard` 保留 P1/P2 的 ADS 修复并覆盖 UNC、设备路径、保留名、尾随点/空格、敏感密钥名、symlink/junction 和 resolve 后 containment。
 - Graph 节点与边保持 P2 拓扑；P3 没有 Policy Node、Approval Node、interrupt、Checkpointer、Session 或 thread_id。
 - 所有工具失败以固定 Envelope 和 ToolMessage status 回填模型；API 仅返回脱敏记录，不返回原始参数、文件内容或异常。
+
+## 7. P4 实际迁移记录
+
+- KamaClaude `PermissionManager` 的“一次调用对应一次人工决定”问题由 LangGraph `interrupt()`、`Command(resume=...)`、checkpointer 和服务端 UUID thread_id 替换；没有迁移 Future、always cache、TUI、EventBus 或策略文件。
+- P3 Policy 扩展为 `allow / require_approval / deny`：三个只读工具 allow，只有 `propose_patch` write 进入审批，其他 write、command、unknown 都 fail closed。
+- KamaClaude `write_file` 未迁移。RepoPilot 的模型只提交 path/new_content/rationale；`PatchProposalBuilder` 读取一个既有 UTF-8 普通文件并计算完整 Diff 与 SHA-256，Proposal 阶段零写入。
+- `ApprovalNode` 是唯一 interrupt 调用者，`ApplyPatchNode` 是唯一写入者。恢复后重新验证 workspace、链接、original/proposed hash、Diff/行数绑定和资源上限，再用同目录临时文件与 `os.replace`。
+- P4 使用 `InMemorySaver`，只保证同一进程内跨请求恢复。P6 才计划 SQLite；checkpoint 不是长期用户记忆。
+- P4 当时不支持 edit、多 Patch 批次、新建/删除/重命名、Shell、Planner、pytest 或自动修复；P5 只在其后增加固定 pytest 与有限修复循环，不改变 P4 历史边界。
+
+## 8. P5 实际迁移记录
+
+- 定向阅读 KamaClaude `core/tools/invocation.py`、`core/task/manager.py`、`core/compact/budget.py` 和 `core/runner.py`，只采用错误分类、有限次数、输出上限与终态清晰的问题定义，没有复制 Bash、daemon、EventBus、Task CRUD 或自动工具重试代码。
+- 通用 Bash 继续删除。`PytestRunner` 独立实现固定参数序列、绝对当前解释器、workspace cwd、环境 allowlist、timeout、持续管道读取、硬输出上限与 best-effort 脱敏；API/模型不能传命令、参数、cwd、env 或 executable。
+- pytest 官方 exit code 0–6 由 Python 映射为 `TestOutcome`。只有 exit code 1 是代码修复反馈；2–6、未知返回码、timeout、output limit 和 launch error 均进入确定性 Review/Report。
+- P4 Apply 成功 ToolMessage 的时点演进为 Apply → Tester → 唯一 ToolMessage；reject、stale 和 Apply failure 仍立即回填。每个新 Proposal 都重新 interrupt 和审批。
+- LangGraph 条件边替代手写重试循环；`max_steps` 限模型轮次，`max_repair_attempts` 限实际 Apply+pytest 次数，两者由 Python 独立裁决。
+- Reviewer 是普通 Python 组件，只核对审批、一次性 context、ToolMessage、Patch/Test ID、文件 hash、exit code 和预算证据；P7 才可能评估 Reviewer Subgraph。
+- P5 没有新增依赖，仍使用 `InMemorySaver`；没有实现 Planner、Git Diff Reviewer、SQLite、Trace、Shell、Docker、MCP、Dify 或 Subagent。
