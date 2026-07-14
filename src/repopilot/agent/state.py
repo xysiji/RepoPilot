@@ -6,7 +6,8 @@ from typing import Annotated, Literal, TypedDict
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph.message import add_messages
 
-from repopilot.schemas.agent import AgentRunError, ToolExecutionRecord
+from repopilot.schemas.agent import AgentRunError
+from repopilot.tools.contracts import ToolExecutionRecord
 
 AgentStatus = Literal[
     "running",

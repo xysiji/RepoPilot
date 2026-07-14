@@ -1,4 +1,4 @@
-"""Stateless composition service for one P2 LangGraph invocation."""
+"""Stateless composition service for one P3 LangGraph invocation."""
 
 from pathlib import Path
 
@@ -8,6 +8,8 @@ from langgraph.errors import GraphRecursionError
 from repopilot.agent.graph import build_agent_graph
 from repopilot.agent.state import create_initial_state
 from repopilot.schemas.agent import AgentRunError, AgentRunResult
+from repopilot.tools.executor import SafeToolExecutor
+from repopilot.tools.policy import ToolSafetyPolicy, WorkspaceGuard
 from repopilot.tools.readonly import build_readonly_tools
 
 
@@ -15,11 +17,13 @@ class AgentService:
     """Own one reusable compiled graph while creating fresh state for every run."""
 
     def __init__(self, workspace_path: str | Path, model: BaseChatModel) -> None:
-        tools = build_readonly_tools(workspace_path)
+        workspace_guard = WorkspaceGuard(workspace_path)
+        tools = build_readonly_tools(workspace_guard)
+        executor = SafeToolExecutor(tools, ToolSafetyPolicy(workspace_guard))
         self._graph = None
         self._build_error: str | None = None
         try:
-            self._graph = build_agent_graph(model, tools)
+            self._graph = build_agent_graph(model, tools, executor)
         except Exception as exc:
             self._build_error = type(exc).__name__
 

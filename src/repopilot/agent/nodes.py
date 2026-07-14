@@ -1,16 +1,14 @@
-"""Custom model and tool nodes for the P2 graph."""
+"""Custom model and P3 safe-tool nodes for the explicit graph."""
 
-import json
-from collections.abc import Mapping, Sequence
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.runnables import Runnable
-from langchain_core.tools import BaseTool
-from pydantic import ValidationError
 
 from repopilot.agent.state import AgentState
-from repopilot.schemas.agent import AgentRunError, ToolExecutionRecord
+from repopilot.schemas.agent import AgentRunError
+from repopilot.tools.contracts import ToolExecutionRecord
+from repopilot.tools.executor import SafeToolExecutor
 
 _MAX_FINAL_ANSWER_CHARACTERS = 4000
 
@@ -78,10 +76,10 @@ class ModelNode:
 
 
 class ToolNode:
-    """Execute every tool call from the latest AI message in model order."""
+    """Delegate every model-ordered call to the P3 safety executor."""
 
-    def __init__(self, tools: Sequence[BaseTool]) -> None:
-        self._tools = {tool.name: tool for tool in tools}
+    def __init__(self, executor: SafeToolExecutor) -> None:
+        self._executor = executor
 
     def __call__(self, state: AgentState) -> dict[str, Any]:
         latest = state["messages"][-1] if state["messages"] else None
@@ -98,15 +96,14 @@ class ToolNode:
             tool_name = tool_call["name"]
             tool_call_id = tool_call["id"]
             tool_input = dict(tool_call["args"])
-            tool_message, execution = self._execute_tool(
+            result = self._executor.execute(
                 model_call=state["model_calls"],
                 tool_name=tool_name,
                 tool_call_id=tool_call_id,
                 tool_input=tool_input,
-                tool=self._tools.get(tool_name),
             )
-            messages.append(tool_message)
-            executions.append(execution)
+            messages.append(result.tool_message)
+            executions.append(result.record)
 
         update: dict[str, Any] = {
             "messages": messages,
@@ -124,53 +121,6 @@ class ToolNode:
             update.update({"status": "running", "error": None})
         return update
 
-    def _execute_tool(
-        self,
-        *,
-        model_call: int,
-        tool_name: str,
-        tool_call_id: str,
-        tool_input: dict[str, Any],
-        tool: BaseTool | None,
-    ) -> tuple[ToolMessage, ToolExecutionRecord]:
-        if tool is None:
-            content = _failure_json("unknown_tool", "Requested tool is not available")
-        else:
-            try:
-                raw_output = tool.invoke(tool_input)
-                content = (
-                    raw_output
-                    if isinstance(raw_output, str)
-                    else json.dumps(raw_output, ensure_ascii=False, sort_keys=True)
-                )
-            except ValidationError:
-                content = _failure_json(
-                    "invalid_tool_arguments",
-                    "Tool arguments failed validation",
-                )
-            except Exception:
-                content = _failure_json("tool_execution_error", "Tool execution failed")
-
-        success, summary, error_type, error_message = _summarize_tool_output(content)
-        return (
-            ToolMessage(
-                content=content,
-                tool_call_id=tool_call_id,
-                name=tool_name,
-                status="success" if success else "error",
-            ),
-            ToolExecutionRecord(
-                step=model_call,
-                tool_name=tool_name,
-                tool_call_id=tool_call_id,
-                input=tool_input,
-                success=success,
-                output_summary=summary,
-                error_type=error_type,
-                error_message=error_message,
-            ),
-        )
-
 
 def _terminal_update(code: str, message: str, *, model_calls: int) -> dict[str, Any]:
     return {
@@ -179,40 +129,3 @@ def _terminal_update(code: str, message: str, *, model_calls: int) -> dict[str, 
         "final_answer": None,
         "error": AgentRunError(code=code, message=message),
     }
-
-
-def _failure_json(error_type: str, message: str) -> str:
-    return json.dumps(
-        {"success": False, "error_type": error_type, "error_message": message},
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-
-
-def _summarize_tool_output(content: str) -> tuple[bool, str, str | None, str | None]:
-    try:
-        payload = json.loads(content)
-    except json.JSONDecodeError:
-        return True, content[:240], None, None
-    if not isinstance(payload, Mapping):
-        return True, str(payload)[:240], None, None
-
-    success = payload.get("success") is True
-    error_type = payload.get("error_type") if isinstance(payload.get("error_type"), str) else None
-    error_message = (
-        payload.get("error_message") if isinstance(payload.get("error_message"), str) else None
-    )
-    if not success:
-        return False, (error_message or "tool failed")[:240], error_type, error_message
-    if "paths" in payload:
-        summary = f"listed {len(payload.get('paths', []))} paths"
-    elif "matches" in payload:
-        summary = f"found {len(payload.get('matches', []))} matches"
-    elif "path" in payload:
-        summary = (
-            f"read {payload.get('path')} ({payload.get('character_count', 0)} characters, "
-            f"truncated={payload.get('truncated', False)})"
-        )
-    else:
-        summary = "tool completed"
-    return True, summary, None, None

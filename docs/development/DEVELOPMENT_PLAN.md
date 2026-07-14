@@ -90,25 +90,25 @@
 
 ## 5. P3：代码工具与安全边界
 
-1. **解决的问题**：让 executor 能高效搜索真实代码，同时建立所有后续副作用都依赖的 WorkspaceGuard、固定子进程和结构化错误。
-2. **KamaClaude 对应阶段**：S3 工具扩展，S5 参数校验/权限/失败分类，S6 tool_result 截断。
-3. **必读课程**：`05-s3-planning.md` 工具部分、`08-s5-tool-safety.md`、`09-s6-context.md` 的 tool_result 截断。
-4. **必读源码**：`core/tools/invocation.py`、`core/tools/builtin/read_file.py`、`core/tools/builtin/list_dir.py`、`core/tools/builtin/bash.py`、`core/tools/builtin/write_file.py`、`core/permissions/policy.py`；测试 `test_builtin_tools.py`、`test_read_file.py`、`test_tool_params.py`、`test_tool_retry.py`、`test_permission_policy.py`。
-5. **实现功能**：完善 WorkspaceGuard；`search_code`；`read_git_diff`；固定 `run_tests` service（暂不接图循环）；输出/文件/Patch 前置限制；统一 ToolError。
-6. **允许修改目录**：`tools/`、`services/`、`schemas/`、executor 工具装配、相关测试/docs。
-7. **禁止实现**：通用 bash、`shell=True`、任意 pytest args、文件写入、Patch/审批、SQLite、MCP。
-8. **输入/输出**：受限相对路径、搜索 query、测试目标；输出带 path/hash/line/exit_code/timeout/truncated 的结构化结果。
-9. **验收场景**：搜索并读取目标函数；安全读取 Git Diff；固定 pytest 可在 fixture 项目运行；所有越界和超限输入 fail closed。
-10. **必须测试**：absolute、`..`、symlink 外跳、Windows drive/UNC（平台可条件化）、NUL、deny globs、binary、max bytes/matches、subprocess 参数数组、timeout kill/reap、stdout/stderr 截断、Git 失败。
-11. **必须理解**：规范化路径、TOCTOU、symlink、命令注入、subprocess 生命周期、结构化错误和副作用重试风险。
-12. **亲手复写**：WorkspaceGuard 的 resolve/containment 关键函数和 run_tests 的 terminate/kill/reap 路径。
-13. **主动修改练习**：把 search_code 的最大匹配数减半，修改测试证明截断仍保留确定性顺序和 omitted 计数。
-14. **故障注入练习**：在工作区内创建指向外部的 symlink，证明 list/read/search 全部拒绝；再模拟 pytest 永不退出验证无孤儿进程。
-15. **预计代码量**：产品 220–330 行；测试 240–360 行。
+1. **解决的问题**：把 P2 工具调用统一为 Dispatch → Validation → Policy → Execution → Normalization，并以稳定 ToolMessage 和脱敏审计回填模型。
+2. **KamaClaude 对应阶段**：S1 的工具失败回填；S5 的参数先于权限、静态策略和失败分类；只借鉴问题与顺序。
+3. **必读课程**：`03-s1-agent-loop.md` 的工具结果回填、`08-s5-tool-safety.md` 的校验/策略部分。
+4. **必读源码**：`core/tools/base.py`、`registry.py`、`invocation.py`、`builtin/read_file.py`、`permissions/policy.py` 及其定向测试。
+5. **实际实现**：`contracts.py` 统一 effect/phase/category/code/envelope；`policy.py` 统一 WorkspaceGuard 和 fail-closed 裁决；`executor.py` 控制严格顺序；生产工具仍仅有 list/read/search。
+6. **允许修改目录**：`tools/`、ToolNode/Graph 组合、Agent/API 审计 schema、相关 tests/scripts/docs。
+7. **禁止实现**：任何写工具、Patch、命令或 subprocess、人工审批、interrupt、Checkpointer、自动重试、Planner、Session、MCP。
+8. **输入/输出**：输入严格 Pydantic 参数；输出固定 success/data/error JSON Envelope、ToolMessage.status 和脱敏 ToolExecutionRecord。
+9. **验收场景**：`.env` 被策略拒绝并回填模型，模型改读 README 后成功；write/command/unknown effect 全部在执行前 fail closed。
+10. **必须测试**：校验/策略/执行顺序 Spy，Tool ID/同轮多调用，路径穿越、ADS、设备名、大小写、symlink/junction，异常脱敏、API/Graph 回归与零网络。
+11. **必须理解**：Schema 与 Policy 边界、effect、fail closed、Phase/Category/Code、ToolMessage 协议、TOCTOU 限制和“Policy 不是沙箱”。
+12. **亲手复写**：参数 Schema、Policy.evaluate、SafeToolExecutor 顺序控制、Exception → Failure → ToolMessage，合计 150–250 行。
+13. **主动修改练习**：设计但不投产 `restricted_read_file`，只读 `.py/.md`，同时复用路径与 ADS 防线。
+14. **故障注入练习**：交换 Policy/Execution、漏 effect、泄漏 ValidationError/异常、错 ID、漏 ToolMessage、恢复 `.env::$DATA`，观察安全测试失败。
+15. **实际范围**：P3 不新增第三方依赖，不改变 P2 Graph 拓扑，不增加生产工具数量。
 16. **预计学习时间**：快速实现 2–3 小时；完整学习 6–8 小时。
-17. **面试题范围**：路径穿越、symlink/TOCTOU、shell 注入、超时回收、ToolError、输出预算。
+17. **面试题范围**：校验与策略、fail closed、Tool Effect、错误三维分类、Windows 路径别名、异常脱敏和非沙箱边界。
 
-**阶段出口**：安全测试是阻断门；任何“靠 Prompt 不越界”的实现不得进入 P4。
+**阶段出口**：P3 安全测试是阻断门；`read_git_diff`、固定 `run_tests` 和所有副作用能力未实现，留给明确授权的后续阶段。
 
 ## 6. P4：Patch 与人工审批
 

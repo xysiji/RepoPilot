@@ -1,4 +1,4 @@
-"""Focused tests for P2 custom model and tool nodes."""
+"""Focused tests for the model node and P3 SafeToolExecutor integration."""
 
 import asyncio
 import json
@@ -9,12 +9,23 @@ from langchain_core.tools import StructuredTool
 
 from repopilot.agent.nodes import ModelNode, ToolNode
 from repopilot.agent.state import create_initial_state
+from repopilot.tools.contracts import ToolEffect
+from repopilot.tools.executor import SafeToolExecutor
+from repopilot.tools.policy import PRODUCTION_TOOL_EFFECTS, ToolSafetyPolicy, WorkspaceGuard
 from repopilot.tools.readonly import build_readonly_tools
 from tests.scripted_model import ScriptedToolCallingModel
 
 
 def _call(name: str, args: dict[str, object], call_id: str) -> dict[str, object]:
     return {"name": name, "args": args, "id": call_id, "type": "tool_call"}
+
+
+def _tool_node(tmp_path: Path, *extra_tools: StructuredTool) -> ToolNode:
+    guard = WorkspaceGuard(tmp_path)
+    tools = [*build_readonly_tools(guard), *extra_tools]
+    effects = dict(PRODUCTION_TOOL_EFFECTS)
+    effects.update({tool.name: ToolEffect.READ_ONLY for tool in extra_tools})
+    return ToolNode(SafeToolExecutor(tools, ToolSafetyPolicy(guard, effects)))
 
 
 def test_model_node_emits_ai_message_and_final_fields() -> None:
@@ -72,7 +83,7 @@ def test_tool_node_executes_all_calls_in_order_and_preserves_ids(tmp_path: Path)
         )
     )
 
-    update = ToolNode(build_readonly_tools(tmp_path))(state)
+    update = _tool_node(tmp_path)(state)
 
     assert [message.tool_call_id for message in update["messages"]] == ["first", "second"]
     assert [record.tool_call_id for record in update["tool_executions"]] == [
@@ -104,11 +115,11 @@ def test_tool_node_returns_stable_unknown_validation_and_exception_errors(
         )
     )
 
-    update = ToolNode([*build_readonly_tools(tmp_path), broken_tool])(state)
+    update = _tool_node(tmp_path, broken_tool)(state)
 
     assert [record.error_type for record in update["tool_executions"]] == [
         "unknown_tool",
-        "invalid_tool_arguments",
+        "invalid_arguments",
         "tool_execution_error",
     ]
     payloads = [json.loads(str(message.content)) for message in update["messages"]]
@@ -130,7 +141,7 @@ def test_failed_tool_does_not_prevent_later_structured_result(tmp_path: Path) ->
         )
     )
 
-    update = ToolNode(build_readonly_tools(tmp_path))(state)
+    update = _tool_node(tmp_path)(state)
 
     assert [record.success for record in update["tool_executions"]] == [False, True]
     assert [message.tool_call_id for message in update["messages"]] == ["missing", "ok"]
@@ -150,7 +161,7 @@ def test_tool_node_sets_max_steps_only_after_completing_current_batch(tmp_path: 
         )
     )
 
-    update = ToolNode(build_readonly_tools(tmp_path))(state)
+    update = _tool_node(tmp_path)(state)
 
     assert update["status"] == "max_steps_exceeded"
     assert len(update["messages"]) == 2

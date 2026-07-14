@@ -117,3 +117,34 @@ def test_agent_api_maps_graph_max_steps_without_recursion_error(tmp_path: Path) 
     assert response.json()["status"] == "max_steps_exceeded"
     assert response.json()["steps"] == 1
     assert response.json()["tool_executions"][0]["tool_call_id"] == "last-call"
+
+
+def test_agent_api_returns_sanitized_p3_policy_audit_without_raw_arguments(
+    tmp_path: Path,
+) -> None:
+    secret = "P3_SECRET_MUST_NOT_LEAK"
+    (tmp_path / ".env").write_text(secret, encoding="utf-8")
+    settings = AppSettings(workspace_path=tmp_path, model_api_key=None, _env_file=None)
+    model = ScriptedToolCallingModel(
+        responses=[
+            AIMessage(
+                content="",
+                tool_calls=[_call("read_file", {"path": ".env"}, "policy-denied")],
+            ),
+            AIMessage(content="The protected file was not read."),
+        ]
+    )
+
+    with TestClient(create_app(settings, model_override=model)) as client:
+        response = client.post("/agent/run", json={"goal": "Inspect configuration"})
+
+    audit = response.json()["tool_executions"][0]
+    assert response.status_code == 200
+    assert audit["phase"] == "policy"
+    assert audit["failure_category"] == "policy_denied"
+    assert audit["error_code"] == "sensitive_path_denied"
+    assert audit["effect"] == "read_only"
+    assert audit["policy_allowed"] is False
+    assert audit["input"] == {"fields": ["path"]}
+    assert ".env" not in response.text
+    assert secret not in response.text

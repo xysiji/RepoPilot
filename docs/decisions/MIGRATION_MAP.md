@@ -97,9 +97,9 @@
 
 - **原项目解决的问题**：`src/kama_claude/core/tools/base.py`、`src/kama_claude/core/tools/registry.py`、`src/kama_claude/core/tools/invocation.py` 管理 schema、查找、超时、错误分类、重试、权限和事件；相应测试覆盖 registry/invocation/retry。
 - **新项目仍有的问题**：需要模型可见工具 schema、参数校验、调用结果和错误反馈。
-- **处理方式**：**使用 LangChain/LangGraph 替换**注册和只读执行；副作用工具保留为程序化 service/tool。
-- **复用代码或设计**：复用结构化 `ToolResult`、schema_error/timeout/permission_denied 分类和“可预期错误不炸毁 Agent”的原则。
-- **框架能力**：`@tool`/StructuredTool、Pydantic args schema、ToolNode、ToolMessage。
+- **处理方式**：**框架替换注册，RepoPilot 自定义安全执行**。LangChain 提供 BaseTool/schema/message；P3 `SafeToolExecutor` 负责顺序、策略和审计。
+- **复用代码或设计**：复用参数先校验、结构化 ToolResult 和“可预期错误回填 Agent”的原则；P3 明确不迁移自动重试。
+- **框架能力**：StructuredTool、`BaseTool.get_input_schema()`、Pydantic args schema、ToolMessage/status；没有采用预构建 ToolNode。
 - **放弃原因**：自建 registry 和 Anthropic schema 转换与 LangChain 重复；统一 `runtime_error` 自动重试可能重复副作用。
 - **失去能力**：不保留同名覆盖、所有工具统一自动重试和自定义 EventBus 生命周期事件。
 - **面试追问**：哪些异常交给 ToolNode？为什么副作用工具不进入 ToolNode？工具 schema 如何影响模型行为？
@@ -185,8 +185,8 @@
 
 - **原项目解决的问题**：`src/kama_claude/core/permissions/policy.py` 以 ALLOW/DENY/ASK、deny/allow patterns 和 outside-cwd 启发式评估工具。
 - **新项目仍有的问题**：必须区分只读与副作用，并确保审批对象和真实 Patch 一致。
-- **处理方式**：**修改后迁移**为 Patch 专用策略，不继续做通用 shell 正则策略。
-- **复用代码或设计**：复用 unknown defaults to ask/fail closed、越界不可被 always cache 绕过、参数摘要。
+- **处理方式**：P3 已先迁移为只读 `ToolSafetyPolicy`；P4 再增加 Patch 专用审批策略，不继续做通用 shell 正则策略。
+- **复用代码或设计**：复用 unknown fail closed、参数先于策略和越界不可被配置绕过；P3 不移植 ASK/Future/always cache。
 - **框架能力**：interrupt 承担暂停；策略和哈希校验由自有代码完成。
 - **放弃原因**：命令正则无法证明 shell 安全；always_allow(tool name) 粒度过粗。
 - **失去能力**：不支持按工具永久允许/拒绝和自定义 regex allowlist。
@@ -327,3 +327,12 @@
 - LangGraph 负责 State reducer、节点调度、条件路由和编译执行；LangChain 继续提供 Chat Model、BaseTool 和标准消息类型。
 - RepoPilot 自定义 ToolNode 保留同轮顺序执行、稳定 JSON 错误与审计记录；评估后没有采用 `langgraph.prebuilt.ToolNode`。
 - EventBus 不迁移；P2 未启用 Checkpointer、interrupt、streaming 或 Trace。
+
+## 6. P3 实际迁移记录
+
+- `tools/contracts.py` 独立定义 effect、phase、category、code、Envelope 和脱敏审计，不复制 KamaClaude dataclass。
+- `SafeToolExecutor` 独立实现 Dispatch → Validation → Policy → Execution → Normalization；KamaClaude Invocation 只提供“参数先校验、失败回填”问题定义。
+- `ToolSafetyPolicy` 用三个显式 read-only mapping；未分类、write、command 在执行前 fail closed。没有移植 PermissionManager、Future、缓存、EventBus 或重试。
+- `WorkspaceGuard` 保留 P1/P2 的 ADS 修复并覆盖 UNC、设备路径、保留名、尾随点/空格、敏感密钥名、symlink/junction 和 resolve 后 containment。
+- Graph 节点与边保持 P2 拓扑；P3 没有 Policy Node、Approval Node、interrupt、Checkpointer、Session 或 thread_id。
+- 所有工具失败以固定 Envelope 和 ToolMessage status 回填模型；API 仅返回脱敏记录，不返回原始参数、文件内容或异常。

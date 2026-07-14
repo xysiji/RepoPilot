@@ -15,6 +15,8 @@ from langgraph.errors import GraphRecursionError
 from repopilot.agent.graph import build_agent_graph
 from repopilot.agent.state import create_initial_state
 from repopilot.services.agent_service import AgentService
+from repopilot.tools.executor import SafeToolExecutor
+from repopilot.tools.policy import ToolSafetyPolicy, WorkspaceGuard
 from repopilot.tools.readonly import build_readonly_tools
 from tests.scripted_model import ScriptedToolCallingModel
 
@@ -25,6 +27,12 @@ def _call(name: str, args: dict[str, object], call_id: str) -> dict[str, object]
 
 def _run(service: AgentService, goal: str, max_steps: int = 3):
     return asyncio.run(service.run(goal, max_steps=max_steps))
+
+
+def _runtime(workspace: Path):
+    guard = WorkspaceGuard(workspace)
+    tools = build_readonly_tools(guard)
+    return tools, SafeToolExecutor(tools, ToolSafetyPolicy(guard))
 
 
 class BindingFailureModel(ScriptedToolCallingModel):
@@ -40,7 +48,8 @@ class BindingFailureModel(ScriptedToolCallingModel):
 
 def test_graph_topology_is_explicit_and_compiled_without_checkpointer(tmp_path: Path) -> None:
     model = ScriptedToolCallingModel(responses=[AIMessage(content="done")])
-    graph = build_agent_graph(model, build_readonly_tools(tmp_path))
+    tools, executor = _runtime(tmp_path)
+    graph = build_agent_graph(model, tools, executor)
     drawable = graph.get_graph()
 
     assert set(drawable.nodes) == {"__start__", "model", "tools", "__end__"}
@@ -82,7 +91,7 @@ def test_tool_result_is_fed_to_next_model_round_with_matching_call_id(tmp_path: 
     tool_message = model.received_messages[1][-1]
     assert isinstance(tool_message, ToolMessage)
     assert tool_message.tool_call_id == "c1"
-    assert json.loads(str(tool_message.content))["content"] == "P2 content"
+    assert json.loads(str(tool_message.content))["data"]["content"] == "P2 content"
 
 
 def test_multiple_tool_calls_and_multiple_rounds_accumulate_in_order(tmp_path: Path) -> None:
@@ -140,10 +149,55 @@ def test_tool_failures_are_feedback_and_do_not_abort_graph(tmp_path: Path) -> No
     assert result.status == "success"
     assert [record.error_type for record in result.tool_executions] == [
         "unknown_tool",
-        "invalid_tool_arguments",
+        "invalid_arguments",
         "not_found",
     ]
     assert all(isinstance(message, ToolMessage) for message in model.received_messages[1][-3:])
+
+
+def test_policy_denial_is_fed_back_and_model_can_choose_safe_path(tmp_path: Path) -> None:
+    (tmp_path / "README.md").write_text("safe", encoding="utf-8")
+    (tmp_path / ".env").write_text("SECRET=never-return", encoding="utf-8")
+    model = ScriptedToolCallingModel(
+        responses=[
+            AIMessage(content="", tool_calls=[_call("read_file", {"path": ".env"}, "denied")]),
+            AIMessage(
+                content="",
+                tool_calls=[_call("read_file", {"path": "README.md"}, "allowed")],
+            ),
+            AIMessage(content="used a safe file"),
+        ]
+    )
+
+    result = _run(AgentService(tmp_path, model), "inspect", max_steps=3)
+
+    denied_message = model.received_messages[1][-1]
+    assert isinstance(denied_message, ToolMessage)
+    assert json.loads(str(denied_message.content))["error"]["code"] == "sensitive_path_denied"
+    assert result.status == "success"
+    assert [record.success for record in result.tool_executions] == [False, True]
+    assert [record.error_code for record in result.tool_executions] == [
+        "sensitive_path_denied",
+        None,
+    ]
+
+
+def test_repeated_policy_denials_end_only_at_model_step_budget(tmp_path: Path) -> None:
+    responses = [
+        AIMessage(
+            content="",
+            tool_calls=[_call("read_file", {"path": ".env"}, f"denied-{index}")],
+        )
+        for index in range(2)
+    ]
+    model = ScriptedToolCallingModel(responses=responses)
+
+    result = _run(AgentService(tmp_path, model), "keep trying", max_steps=2)
+
+    assert result.status == "max_steps_exceeded"
+    assert result.steps == 2
+    assert len(result.tool_executions) == 2
+    assert all(record.error_code == "sensitive_path_denied" for record in result.tool_executions)
 
 
 def test_max_steps_terminates_after_last_tool_batch(tmp_path: Path) -> None:
@@ -213,7 +267,7 @@ def test_graph_builder_rejects_duplicate_tool_names() -> None:
     model = ScriptedToolCallingModel(responses=[AIMessage(content="unused")])
 
     with pytest.raises(ValueError, match="tool names must be unique"):
-        build_agent_graph(model, tools)
+        build_agent_graph(model, tools, None)  # type: ignore[arg-type]
 
 
 def test_unexpected_graph_recursion_error_is_converted_without_traceback(
@@ -226,7 +280,7 @@ def test_unexpected_graph_recursion_error_is_converted_without_traceback(
 
     monkeypatch.setattr(
         "repopilot.services.agent_service.build_agent_graph",
-        lambda model, tools: RecursingGraph(),
+        lambda model, tools, executor: RecursingGraph(),
     )
     service = AgentService(
         tmp_path,
@@ -245,7 +299,8 @@ def test_compiled_graph_reuse_does_not_share_state_between_invocations(tmp_path:
     model = ScriptedToolCallingModel(
         responses=[AIMessage(content="first"), AIMessage(content="second")]
     )
-    graph = build_agent_graph(model, build_readonly_tools(tmp_path))
+    tools, executor = _runtime(tmp_path)
+    graph = build_agent_graph(model, tools, executor)
 
     first = asyncio.run(graph.ainvoke(create_initial_state("goal one", 2)))
     second = asyncio.run(graph.ainvoke(create_initial_state("goal two", 2)))
@@ -268,7 +323,8 @@ def test_final_graph_state_has_complete_protocol_sequence(tmp_path: Path) -> Non
             AIMessage(content="done"),
         ]
     )
-    graph = build_agent_graph(model, build_readonly_tools(tmp_path))
+    tools, executor = _runtime(tmp_path)
+    graph = build_agent_graph(model, tools, executor)
 
     final = asyncio.run(graph.ainvoke(create_initial_state("goal", 3)))
 

@@ -1,73 +1,48 @@
-"""Workspace-bound LangChain tools for the P1 read-only agent."""
+"""Three bounded, workspace-only, read-only LangChain tools for P3."""
+
+from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
 
 from langchain_core.tools import BaseTool, StructuredTool
 
-from repopilot.schemas.agent import (
+from repopilot.tools.contracts import (
+    TOOL_LIMITS,
     ListFilesArgs,
-    ListFilesResult,
     ReadFileArgs,
-    ReadFileResult,
     SearchCodeArgs,
-    SearchCodeResult,
     SearchMatch,
+    ToolErrorCode,
+    ToolExecutionPhase,
+    ToolFailureCategory,
+    failed_result,
+    successful_result,
 )
+from repopilot.tools.policy import WorkspaceGuard, WorkspacePolicyError
 
-_EXCLUDED_DIRECTORIES = frozenset({".git", ".venv", "__pycache__"})
-_MAX_LIST_PATHS = 200
-_MAX_FILE_CHARACTERS = 20_000
-_MAX_FILE_BYTES = _MAX_FILE_CHARACTERS * 4 + 4
-_MAX_SEARCH_FILE_BYTES = 256 * 1024
-_MAX_SEARCH_DEPTH = 8
+_MAX_READ_BYTES = TOOL_LIMITS.max_read_characters * 4 + 4
 
 
-class WorkspacePathError(PermissionError):
-    """Raised when a requested path violates the P1 workspace boundary."""
+def _failure_json(
+    category: ToolFailureCategory,
+    code: ToolErrorCode,
+    message: str,
+) -> str:
+    return failed_result(
+        phase=ToolExecutionPhase.EXECUTION,
+        category=category,
+        code=code,
+        message=message,
+    ).stable_json()
 
 
-class WorkspaceGuard:
-    """Resolve canonical paths and keep them under one configured workspace root."""
-
-    def __init__(self, workspace_path: str | Path) -> None:
-        root = Path(workspace_path).resolve(strict=True)
-        if not root.is_dir():
-            raise NotADirectoryError("workspace root must be a directory")
-        self.root = root
-
-    def resolve(self, relative_path: str) -> Path:
-        requested = Path(relative_path)
-        if requested.is_absolute() or requested.drive or requested.root:
-            raise WorkspacePathError("absolute paths are not allowed")
-        if ".." in requested.parts:
-            raise WorkspacePathError("parent path segments are not allowed")
-        if any(_is_excluded_name(part) for part in requested.parts):
-            raise WorkspacePathError("sensitive paths are not available to tools")
-
-        candidate = (self.root / requested).resolve(strict=True)
-        if not self.contains(candidate):
-            raise WorkspacePathError("path must stay within the workspace")
-        return candidate
-
-    def contains(self, path: Path) -> bool:
-        try:
-            resolved_relative = path.resolve(strict=True).relative_to(self.root)
-        except (OSError, ValueError):
-            return False
-        return not any(_is_excluded_name(part) for part in resolved_relative.parts)
-
-    def relative(self, path: Path) -> str:
-        return path.relative_to(self.root).as_posix()
-
-
-def _is_excluded_name(name: str) -> bool:
-    lowered = name.casefold()
-    return lowered in _EXCLUDED_DIRECTORIES or lowered == ".env" or lowered.startswith(".env.")
-
-
-def _error_message(error_type: str, message: str) -> tuple[str, str]:
-    return error_type, message
+def _workspace_failure(error: WorkspacePolicyError) -> str:
+    return _failure_json(
+        ToolFailureCategory.POLICY_DENIED,
+        error.code,
+        "The path no longer satisfies the workspace safety policy.",
+    )
 
 
 def _iter_search_files(guard: WorkspaceGuard, directory: Path) -> Iterator[Path]:
@@ -80,46 +55,44 @@ def _iter_search_files(guard: WorkspaceGuard, directory: Path) -> Iterator[Path]
         except OSError:
             continue
         for entry in entries:
-            if (
-                _is_excluded_name(entry.name)
-                or entry.is_symlink()
-                or entry.is_junction()
-                or not guard.contains(entry)
-            ):
+            if not guard.is_safe_discovered_path(entry):
                 continue
-            if entry.is_dir() and depth < _MAX_SEARCH_DEPTH:
+            if entry.is_dir() and depth < TOOL_LIMITS.max_search_depth:
                 pending.append((entry, depth + 1))
             elif entry.is_file():
                 files.append(entry)
     yield from sorted(files, key=lambda path: guard.relative(path).casefold())
 
 
-def build_readonly_tools(workspace_path: str | Path) -> list[BaseTool]:
-    """Create the stable P1 tool set bound to a validated workspace."""
+def build_readonly_tools(workspace: str | Path | WorkspaceGuard) -> list[BaseTool]:
+    """Create the fixed P3 production tool set bound to one workspace policy."""
 
-    guard = WorkspaceGuard(workspace_path)
+    guard = workspace if isinstance(workspace, WorkspaceGuard) else WorkspaceGuard(workspace)
 
     def list_files(directory: str = ".", recursive: bool = False, max_depth: int = 2) -> str:
-        """List safe relative workspace paths; this tool never reads file contents."""
+        """List bounded safe paths without reading file contents."""
 
         try:
-            start = guard.resolve(directory)
+            start = guard.resolve_existing(directory)
             if not start.is_dir():
-                raise NotADirectoryError
+                return _failure_json(
+                    ToolFailureCategory.FILESYSTEM,
+                    ToolErrorCode.NOT_A_DIRECTORY,
+                    "The requested path is not a directory.",
+                )
             paths: list[str] = []
             truncated = False
 
             def visit(current: Path, depth: int) -> None:
                 nonlocal truncated
-                for entry in sorted(current.iterdir(), key=lambda path: path.name.casefold()):
-                    if (
-                        _is_excluded_name(entry.name)
-                        or entry.is_symlink()
-                        or entry.is_junction()
-                        or not guard.contains(entry)
-                    ):
+                try:
+                    entries = sorted(current.iterdir(), key=lambda path: path.name.casefold())
+                except PermissionError:
+                    return
+                for entry in entries:
+                    if not guard.is_safe_discovered_path(entry):
                         continue
-                    if len(paths) >= _MAX_LIST_PATHS:
+                    if len(paths) >= TOOL_LIMITS.max_list_paths:
                         truncated = True
                         return
                     relative = guard.relative(entry)
@@ -133,76 +106,91 @@ def build_readonly_tools(workspace_path: str | Path) -> list[BaseTool]:
                         paths.append(relative)
 
             visit(start, 0)
-            return ListFilesResult(
-                success=True,
-                paths=paths,
-                truncated=truncated,
-            ).model_dump_json()
-        except WorkspacePathError:
-            error_type, message = _error_message(
-                "permission_denied", "directory is outside the readable workspace"
-            )
+            return successful_result({"paths": paths, "truncated": truncated}).stable_json()
+        except WorkspacePolicyError as exc:
+            return _workspace_failure(exc)
         except FileNotFoundError:
-            error_type, message = _error_message("not_found", "directory was not found")
-        except NotADirectoryError:
-            error_type, message = _error_message("invalid_path", "path is not a directory")
+            return _failure_json(
+                ToolFailureCategory.FILESYSTEM,
+                ToolErrorCode.NOT_FOUND,
+                "The requested directory was not found.",
+            )
+        except PermissionError:
+            return _failure_json(
+                ToolFailureCategory.FILESYSTEM,
+                ToolErrorCode.PERMISSION_DENIED,
+                "The requested directory cannot be read.",
+            )
         except OSError:
-            error_type, message = _error_message("filesystem_error", "directory could not be read")
-        return ListFilesResult(
-            success=False,
-            error_type=error_type,
-            error_message=message,
-        ).model_dump_json()
+            return _failure_json(
+                ToolFailureCategory.EXECUTION_FAILURE,
+                ToolErrorCode.TOOL_EXECUTION_ERROR,
+                "The directory listing failed.",
+            )
 
     def read_file(path: str) -> str:
-        """Read bounded UTF-8 text only; sensitive, binary, and outside paths are rejected."""
+        """Read bounded UTF-8 text after rechecking the workspace boundary."""
 
         try:
-            file_path = guard.resolve(path)
+            file_path = guard.resolve_existing(path)
             if not file_path.is_file():
-                raise IsADirectoryError
+                return _failure_json(
+                    ToolFailureCategory.FILESYSTEM,
+                    ToolErrorCode.NOT_A_FILE,
+                    "The requested path is not a file.",
+                )
             with file_path.open("rb") as handle:
-                raw = handle.read(_MAX_FILE_BYTES + 1)
+                raw = handle.read(_MAX_READ_BYTES + 1)
             if b"\x00" in raw:
-                raise UnicodeDecodeError("utf-8", raw, 0, 1, "NUL byte")
+                return _failure_json(
+                    ToolFailureCategory.UNSUPPORTED_CONTENT,
+                    ToolErrorCode.BINARY_FILE,
+                    "Binary files are not supported.",
+                )
 
-            byte_truncated = len(raw) > _MAX_FILE_BYTES
-            data = raw[:_MAX_FILE_BYTES]
+            byte_truncated = len(raw) > _MAX_READ_BYTES
+            data = raw[:_MAX_READ_BYTES]
             try:
                 text = data.decode("utf-8")
             except UnicodeDecodeError as exc:
                 if byte_truncated and exc.start >= len(data) - 4:
                     text = data[: exc.start].decode("utf-8")
                 else:
-                    raise
-            content = text[:_MAX_FILE_CHARACTERS]
-            truncated = byte_truncated or len(text) > _MAX_FILE_CHARACTERS
-            return ReadFileResult(
-                success=True,
-                path=guard.relative(file_path),
-                content=content,
-                character_count=len(content),
-                truncated=truncated,
-            ).model_dump_json()
-        except WorkspacePathError:
-            error_type, message = _error_message(
-                "permission_denied", "file is outside the readable workspace"
-            )
+                    return _failure_json(
+                        ToolFailureCategory.UNSUPPORTED_CONTENT,
+                        ToolErrorCode.INVALID_ENCODING,
+                        "The file is not valid UTF-8 text.",
+                    )
+            content = text[: TOOL_LIMITS.max_read_characters]
+            truncated = byte_truncated or len(text) > TOOL_LIMITS.max_read_characters
+            return successful_result(
+                {
+                    "path": guard.relative(file_path),
+                    "content": content,
+                    "character_count": len(content),
+                    "truncated": truncated,
+                }
+            ).stable_json()
+        except WorkspacePolicyError as exc:
+            return _workspace_failure(exc)
         except FileNotFoundError:
-            error_type, message = _error_message("not_found", "file was not found")
-        except IsADirectoryError:
-            error_type, message = _error_message("invalid_path", "path is not a file")
-        except UnicodeDecodeError:
-            error_type, message = _error_message(
-                "binary_file", "file is binary or is not valid UTF-8 text"
+            return _failure_json(
+                ToolFailureCategory.FILESYSTEM,
+                ToolErrorCode.NOT_FOUND,
+                "The requested file was not found.",
+            )
+        except PermissionError:
+            return _failure_json(
+                ToolFailureCategory.FILESYSTEM,
+                ToolErrorCode.PERMISSION_DENIED,
+                "The requested file cannot be read.",
             )
         except OSError:
-            error_type, message = _error_message("filesystem_error", "file could not be read")
-        return ReadFileResult(
-            success=False,
-            error_type=error_type,
-            error_message=message,
-        ).model_dump_json()
+            return _failure_json(
+                ToolFailureCategory.EXECUTION_FAILURE,
+                ToolErrorCode.TOOL_EXECUTION_ERROR,
+                "The file read failed.",
+            )
 
     def search_code(
         query: str,
@@ -210,27 +198,22 @@ def build_readonly_tools(workspace_path: str | Path) -> list[BaseTool]:
         file_suffix: str | None = None,
         max_results: int = 20,
     ) -> str:
-        """Search plain UTF-8 text; this tool does not use embeddings or leave the workspace."""
+        """Search literal UTF-8 text within bounded workspace files."""
 
-        if not query.strip():
-            return SearchCodeResult(
-                success=False,
-                error_type="invalid_arguments",
-                error_message="query must not be empty",
-            ).model_dump_json()
-        suffix = file_suffix.casefold() if file_suffix else None
-        if suffix and not suffix.startswith("."):
-            suffix = f".{suffix}"
         try:
-            start = guard.resolve(directory)
+            start = guard.resolve_existing(directory)
             if not start.is_dir():
-                raise NotADirectoryError
+                return _failure_json(
+                    ToolFailureCategory.FILESYSTEM,
+                    ToolErrorCode.NOT_A_DIRECTORY,
+                    "The requested path is not a directory.",
+                )
             matches: list[SearchMatch] = []
             for file_path in _iter_search_files(guard, start):
-                if suffix and file_path.suffix.casefold() != suffix:
+                if file_suffix and file_path.suffix.casefold() != file_suffix.casefold():
                     continue
                 try:
-                    if file_path.stat().st_size > _MAX_SEARCH_FILE_BYTES:
+                    if file_path.stat().st_size > TOOL_LIMITS.max_search_file_bytes:
                         continue
                     raw = file_path.read_bytes()
                     if b"\x00" in raw:
@@ -244,41 +227,53 @@ def build_readonly_tools(workspace_path: str | Path) -> list[BaseTool]:
                             SearchMatch(
                                 path=guard.relative(file_path),
                                 line_number=line_number,
-                                line=line[:500],
+                                line=line[: TOOL_LIMITS.max_search_line_characters],
                             )
                         )
                         if len(matches) > max_results:
-                            return SearchCodeResult(
-                                success=True,
-                                matches=matches[:max_results],
-                                truncated=True,
-                            ).model_dump_json()
-            return SearchCodeResult(success=True, matches=matches).model_dump_json()
-        except WorkspacePathError:
-            error_type, message = _error_message(
-                "permission_denied", "directory is outside the searchable workspace"
-            )
+                            return successful_result(
+                                {
+                                    "matches": [
+                                        match.model_dump(mode="json")
+                                        for match in matches[:max_results]
+                                    ],
+                                    "truncated": True,
+                                }
+                            ).stable_json()
+            return successful_result(
+                {
+                    "matches": [match.model_dump(mode="json") for match in matches],
+                    "truncated": False,
+                }
+            ).stable_json()
+        except WorkspacePolicyError as exc:
+            return _workspace_failure(exc)
         except FileNotFoundError:
-            error_type, message = _error_message("not_found", "directory was not found")
-        except NotADirectoryError:
-            error_type, message = _error_message("invalid_path", "path is not a directory")
-        except OSError:
-            error_type, message = _error_message(
-                "filesystem_error", "directory could not be searched"
+            return _failure_json(
+                ToolFailureCategory.FILESYSTEM,
+                ToolErrorCode.NOT_FOUND,
+                "The requested directory was not found.",
             )
-        return SearchCodeResult(
-            success=False,
-            error_type=error_type,
-            error_message=message,
-        ).model_dump_json()
+        except PermissionError:
+            return _failure_json(
+                ToolFailureCategory.FILESYSTEM,
+                ToolErrorCode.PERMISSION_DENIED,
+                "The requested directory cannot be searched.",
+            )
+        except OSError:
+            return _failure_json(
+                ToolFailureCategory.EXECUTION_FAILURE,
+                ToolErrorCode.TOOL_EXECUTION_ERROR,
+                "The code search failed.",
+            )
 
     return [
         StructuredTool.from_function(
             func=list_files,
             name="list_files",
             description=(
-                "Call to discover relative files and directories under the configured workspace. "
-                "Supports bounded recursion; excludes sensitive folders and cannot read content."
+                "List safe relative workspace paths with bounded recursion. "
+                "Sensitive and linked paths are excluded; no file content is read."
             ),
             args_schema=ListFilesArgs,
         ),
@@ -286,8 +281,8 @@ def build_readonly_tools(workspace_path: str | Path) -> list[BaseTool]:
             func=read_file,
             name="read_file",
             description=(
-                "Call to read bounded UTF-8 text from one relative workspace file. "
-                "Returns stable JSON and cannot read secrets, binary files, or outside paths."
+                "Read bounded UTF-8 text from one safe relative workspace file. "
+                "Sensitive, linked, binary, and outside paths are rejected."
             ),
             args_schema=ReadFileArgs,
         ),
@@ -295,8 +290,8 @@ def build_readonly_tools(workspace_path: str | Path) -> list[BaseTool]:
             func=search_code,
             name="search_code",
             description=(
-                "Call to find literal text in workspace files with optional directory, suffix, "
-                "and result limit. Returns relative paths and line numbers; never writes files."
+                "Find literal text in bounded safe workspace files and return relative paths "
+                "and line numbers. This tool never writes files."
             ),
             args_schema=SearchCodeArgs,
         ),

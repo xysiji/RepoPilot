@@ -11,6 +11,8 @@ from langchain_core.messages import AIMessage
 
 from repopilot.agent.graph import build_agent_graph
 from repopilot.services.agent_service import AgentService
+from repopilot.tools.executor import SafeToolExecutor
+from repopilot.tools.policy import ToolSafetyPolicy, WorkspaceGuard
 from repopilot.tools.readonly import build_readonly_tools
 
 
@@ -54,7 +56,10 @@ async def run_demo() -> None:
     )
     result = await AgentService(workspace, model).run("总结示例项目", max_steps=4)
     diagram_model = DemoGraphModel(responses=[AIMessage(content="unused")])
-    graph = build_agent_graph(diagram_model, build_readonly_tools(workspace))
+    guard = WorkspaceGuard(workspace)
+    tools = build_readonly_tools(guard)
+    executor = SafeToolExecutor(tools, ToolSafetyPolicy(guard))
+    graph = build_agent_graph(diagram_model, tools, executor)
 
     print("engine: langgraph")
     print("nodes: __start__ -> model -> tools -> model -> tools -> model -> __end__")

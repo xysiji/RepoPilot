@@ -4,7 +4,7 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langgraph.graph import END, START, StateGraph
 
 from repopilot.agent.state import AgentState, create_initial_state
-from repopilot.schemas.agent import ToolExecutionRecord
+from repopilot.tools.contracts import ToolExecutionPhase, ToolExecutionRecord
 
 
 def test_initial_state_uses_fresh_containers_and_model_round_semantics() -> None:
@@ -36,6 +36,7 @@ def test_message_and_execution_reducers_append_partial_node_updates() -> None:
         input={"path": "README.md"},
         success=True,
         output_summary="read README.md",
+        phase=ToolExecutionPhase.NORMALIZATION,
     )
 
     def append_updates(state: AgentState) -> dict[str, object]:

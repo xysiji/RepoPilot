@@ -76,11 +76,11 @@
 
 | # | 概念题 | 源码题 | 设计取舍题 | 异常/安全/排错题 |
 | --- | --- | --- | --- | --- |
-| 1 | canonical path 与 containment | 定位 WorkspaceGuard 主校验链 | 统一 guard vs 每工具各校验 | `..`、绝对路径、UNC/盘符绕过 |
-| 2 | symlink/junction 与 TOCTOU | 定位 resolve/symlink 检查 | 全拒 symlink vs 允许工作区内 symlink | 审批/读取间替换链接的故障注入 |
-| 3 | subprocess exec 与 shell 注入 | 定位 run_tests 参数数组 | 固定 pytest vs 通用 Bash | 恶意 target/参数能否注入命令 |
-| 4 | timeout/terminate/kill/reap | 定位子进程超时清理 | timeout 是否值得自动重试 | Windows/Unix 子进程树和孤儿进程 |
-| 5 | 结果截断与结构化 ToolError | 定位 max bytes/matches 和 error code | 保留头/尾/完整输出的取舍 | 大输出、二进制、decode 失败排错 |
+| 1 | Schema 与 Policy 的边界 | 定位 `get_input_schema()` 到 `Policy.evaluate()` | 为什么参数错不进入审批 | ValidationError 如何脱敏且证明工具未执行 |
+| 2 | Tool Effect 与 fail closed | 定位 effect mapping 和拒绝分支 | 小 mapping vs 通用策略 DSL | 漏分类或模型伪造 effect 如何被阻断 |
+| 3 | Phase/Category/Code 与 Envelope | 定位 Failure → ToolMessage → audit | 为什么不是自由异常字符串 | 非法工具结果、异常和 API 泄漏如何排查 |
+| 4 | Workspace containment 与 Windows 别名 | 定位 ADS/UNC/device/trailing-dot 检查 | 统一 guard vs 每工具校验 | `..`、大小写、ADS、设备名绕过 |
+| 5 | Symlink/Junction、TOCTOU 与非沙箱边界 | 定位策略检查和执行前复核 | 全拒链接的可用性取舍 | 链接替换、漏 ToolMessage、错误 ID 故障注入 |
 
 ## 9. P4 题目主题
 
