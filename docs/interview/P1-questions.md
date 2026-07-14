@@ -1,5 +1,7 @@
 # RepoPilot P1 面试题
 
+> 历史题集：P1 手写循环已在 P2 迁移并删除；涉及 `agent/loop.py` 的题目应在 Git 提交 `aa39eeb` 上作答。当前实现见 P2 题集。
+
 ## 一、概念题（1—5）
 
 ### 1. Tool Calling 与普通 Python 函数调用有什么本质区别？

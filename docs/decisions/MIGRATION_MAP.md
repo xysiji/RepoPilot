@@ -12,14 +12,14 @@
 | --- | --- | --- | --- | --- | --- |
 | 1 | 配置管理 | `infrastructure/config.py` | 修改后迁移 | Pydantic v2 | 保留 |
 | 2 | LLM Provider | `infrastructure/model_factory.py` | 使用框架替换 | LangChain ChatModel | 保留 |
-| 3 | AgentRunner | `agent/graph.py` + API service | 使用框架替换 | LangGraph compiled graph | 保留职责，不保留类 |
-| 4 | AgentLoop | StateGraph 节点与边 | 使用框架替换 | LangGraph | 保留能力 |
-| 5 | ExecutionContext | `schemas/state.py` | 使用框架替换 | LangGraph State/reducers | 保留能力 |
-| 6 | ToolRegistry | `tools/` + executor ToolNode | 使用框架替换 | LangChain tools/ToolNode | 保留能力 |
+| 3 | AgentRunner | `agent/graph.py` + `services/agent_service.py` | 使用框架替换 | LangGraph compiled graph | P2 已保留组合职责，不保留巨型类 |
+| 4 | AgentLoop | `agent/nodes.py` + `agent/routing.py` | 使用框架替换 | LangGraph StateGraph | P2 已替换手写循环 |
+| 5 | ExecutionContext | `agent/state.py` | 使用框架替换 | LangGraph State/reducers | P2 已实现最小显式状态 |
+| 6 | ToolRegistry | `tools/readonly.py` + 自定义 ToolNode | 修改后迁移 | LangChain BaseTool；不采用预构建 ToolNode | P2 保留顺序和审计语义 |
 | 7 | 文件读取工具 | `tools/read_file.py` | 修改后迁移 | LangChain tool schema | 保留 |
 | 8 | 文件写入工具 | `services/patch_applier.py` | 第一版删除通用工具；改为专用能力 | 无 | 仅保留 apply_patch |
 | 9 | Bash 工具 | 固定 `run_tests`/Git 服务 | 第一版删除 | 无 | 不保留通用 shell |
-| 10 | TaskManager | State 中的 `ExecutionPlan` | 使用框架替换 | LangGraph checkpoint | 保留计划，不保留文件 CRUD |
+| 10 | TaskManager | 后续 State 中的 `ExecutionPlan` | 后续阶段再实现 | LangGraph State/checkpoint | P2 不迁移 |
 | 11 | EventBus | graph updates/trace state | 第一版删除 | LangGraph stream/callback | 不保留 |
 | 12 | EventWriter | checkpoint + trace_events | 第一版删除 | LangGraph persistence | 不保留 JSONL writer |
 | 13 | TraceWriter | P6 trace adapter | 后续阶段再实现 | LangSmith 可选 + State trace | 部分保留 |
@@ -318,3 +318,12 @@
 第一版保留的核心能力是：结构化规划、只读工具循环、Patch 生成、人工审批、受控应用、pytest 反馈、有限重规划、Git Diff 审查、持久状态和 Trace 摘要。
 
 主动舍弃的能力是：daemon/IPC/TUI、多客户端事件流、通用 shell、自由 write_file、task JSON、长期 notes、自动 compact、Skills、并行 Subagents 和自研 MCP。舍弃这些能力不是否认其价值，而是为了让一天 Demo 的每个关键安全不变量都能由少量代码和测试证明。
+
+## 5. P2 实际迁移记录
+
+- P1 `ToolCallingLoop` 已由 LangGraph `StateGraph`、自定义节点和条件边替换；旧实现可在提交 `aa39eeb` 查看。
+- KamaClaude AgentLoop 只提供“消息配对、失败回填、有限终止”问题定义，没有复制实现。
+- KamaClaude TaskManager 在 P2 未迁移；本阶段没有 Planner、ExecutionPlan 或任务 CRUD。
+- LangGraph 负责 State reducer、节点调度、条件路由和编译执行；LangChain 继续提供 Chat Model、BaseTool 和标准消息类型。
+- RepoPilot 自定义 ToolNode 保留同轮顺序执行、稳定 JSON 错误与审计记录；评估后没有采用 `langgraph.prebuilt.ToolNode`。
+- EventBus 不迁移；P2 未启用 Checkpointer、interrupt、streaming 或 Trace。

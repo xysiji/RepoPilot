@@ -1,9 +1,9 @@
-"""Minimal scripted BaseChatModel used only by P1 offline tests."""
+"""Minimal scripted BaseChatModel used by offline agent tests."""
 
 from collections.abc import Sequence
 from typing import Any
 
-from langchain_core.callbacks.manager import CallbackManagerForLLMRun
+from langchain_core.callbacks.manager import AsyncCallbackManagerForLLMRun, CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
@@ -39,6 +39,22 @@ class ScriptedToolCallingModel(BaseChatModel):
         run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> ChatResult:
+        self.received_messages.append(list(messages))
+        if self.raise_on_invoke:
+            raise RuntimeError("scripted model failure")
+        if not self.responses:
+            raise RuntimeError("scripted responses exhausted")
+        return ChatResult(generations=[ChatGeneration(message=self.responses.pop(0))])
+
+    async def _agenerate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: AsyncCallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        """Exercise LangGraph's native async invocation without threads or network I/O."""
+
         self.received_messages.append(list(messages))
         if self.raise_on_invoke:
             raise RuntimeError("scripted model failure")

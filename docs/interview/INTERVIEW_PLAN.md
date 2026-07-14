@@ -67,10 +67,10 @@
 | # | 概念题 | 源码题 | 设计取舍题 | 异常/安全/排错题 |
 | --- | --- | --- | --- | --- |
 | 1 | StateGraph 的 node/edge/START/END | 定位 graph builder 和入口边 | 显式图与手写 while 的取舍 | 缺 END/错误条件边如何表现 |
-| 2 | State 字段与 messages 的边界 | 定位 plan/evidence writer-reader | 为什么不把 plan/test 都塞 messages | State 中不可序列化对象如何发现 |
-| 3 | reducers 与单 writer 原则 | 定位 messages/evidence/errors reducer | append 与 replace 的取舍 | 并发/多节点写无 reducer 冲突 |
-| 4 | 结构化 ExecutionPlan | 定位 planner structured output | TaskManager 文件 CRUD vs State plan | 非法 plan 的修复次数和停止条件 |
-| 5 | 条件路由与循环预算 | 定位 executor router/max rounds | 预算放配置还是 State | off-by-one 造成多调用或早停 |
+| 2 | State 字段与 messages 的边界 | 定位 ModelNode/ToolNode 的 writer | 为什么运行依赖不进入 State | reducer 被改成覆盖如何发现 |
+| 3 | reducers 与单 writer 原则 | 定位 messages/tool_executions reducer | add_messages 与普通 append 的取舍 | 多请求 State 污染如何定位 |
+| 4 | ToolMessage 与 tool_call_id | 定位自定义 ToolNode 的顺序执行 | 自定义 ToolNode vs 预构建 ToolNode | 漏回填/错 ID 如何复现 |
+| 5 | model_calls、max_steps 与 recursion limit | 定位两个 router 和预算终止 | Graph API vs create_agent/Functional API | off-by-one 或无限循环如何排查 |
 
 ## 8. P3 题目主题
 

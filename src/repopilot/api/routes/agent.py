@@ -1,4 +1,4 @@
-"""Minimal HTTP boundary for one in-memory P1 agent run."""
+"""Minimal HTTP boundary for one in-memory P2 graph run."""
 
 from typing import Annotated
 
@@ -15,12 +15,12 @@ router = APIRouter(tags=["agent"])
 
 
 @router.post("/agent/run", response_model=AgentRunResult)
-def run_agent(
+async def run_agent(
     request: AgentRunRequest,
     settings: Annotated[AppSettings, Depends(get_settings)],
     model_override: Annotated[BaseChatModel | None, Depends(get_model_override)],
 ) -> AgentRunResult:
-    """Run the bounded read-only loop; state is not persisted between requests."""
+    """Run the bounded read-only graph; state is not persisted between requests."""
 
     model = model_override
     if model is None:
@@ -36,9 +36,8 @@ def run_agent(
             ) from exc
 
     try:
-        return AgentService(settings.workspace_path).run(
+        return await AgentService(settings.workspace_path, model).run(
             request.goal,
-            model=model,
             max_steps=request.max_steps,
         )
     except (FileNotFoundError, NotADirectoryError) as exc:

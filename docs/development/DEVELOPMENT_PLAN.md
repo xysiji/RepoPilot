@@ -68,23 +68,23 @@
 
 ## 4. P2：LangGraph State 与显式流程
 
-1. **解决的问题**：把 P1 的隐式循环升级为可持久、可路由、可单测的 StateGraph，先跑通 initialize/planner/executor/final_report 的只读骨架。
-2. **KamaClaude 对应阶段**：S1 AgentLoop/Runner/ExecutionContext；S3 TaskManager 的结构化计划思想。
-3. **必读课程**：`03-s1-agent-loop.md`、`05-s3-planning.md`、`06-s3-trace.md` 的状态与步骤相关部分。
+1. **解决的问题**：把 P1 的手写 Tool Calling 循环迁移为可路由、可单测的显式 StateGraph；本阶段仍是无持久化的只读 Agent。
+2. **KamaClaude 对应阶段**：S1 AgentLoop/Runner/ExecutionContext；S3 TaskManager 仅用于理解状态与终止条件，不迁移规划功能。
+3. **必读课程**：`03-s1-agent-loop.md`、`05-s3-planning.md` 中与状态、路由和终止条件相关的部分。
 4. **必读源码**：`core/runner.py`、`core/loop.py`、`core/context.py`、`core/task/model.py`、`core/task/manager.py`；测试 `test_runner.py`、`test_loop.py`、`test_task_model.py`、`test_task_manager.py`。
-5. **实现功能**：State schema、ExecutionPlan/FileEdit 前置模型、initialize、planner、executor 只读子图、无 Patch 的 final_report、条件边、graph factory、`POST/GET /runs` 初版。
-6. **允许修改目录**：`agent/`、`schemas/`、`prompts/`、`api/`、复用 P1 tools/services、相关测试/docs。
-7. **禁止实现**：generate/apply Patch、approval、run_tests、SQLite（可用 InMemorySaver 做测试）、MCP/subagent/EventBus。
-8. **输入/输出**：输入 CreateRunRequest；输出 thread_id、结构化计划、evidence 和分析型 final report。
-9. **验收场景**：只读分析任务从 START 到 END；plan 校验失败反馈一次；executor 工具循环受预算；非法状态走失败报告。
-10. **必须测试**：每个 node 纯单测、边路由、State writer/readers、reducers、plan replacement、max rounds、API state projection、同 thread 查询。
-11. **必须理解**：StateGraph、START/END、conditional edges、reducers、node purity、RunnableConfig、graph 与 chain 的区别。
-12. **亲手复写**：不复制示例，亲手写 graph builder 与 test_router 等路由函数，并画出真实节点图。
-13. **主动修改练习**：给 planner 增加 `acceptance_criteria`，让 executor 和 final report 都读取它，验证 State 不依赖 messages 传值。
-14. **故障注入练习**：让两个节点错误地写同一无 reducer 字段，观察冲突/覆盖，再修成单 writer 或明确 reducer。
-15. **预计代码量**：产品 150–230 行；测试 140–210 行。
+5. **实际实现**：`AgentState`、自定义 `ModelNode`/`ToolNode`、两个纯路由、graph builder 和 `AgentService.ainvoke()`；生产图为 `START -> model -> tools/model END`。
+6. **允许修改目录**：`agent/`、`services/`、`api/`、P1 测试辅助与相关 tests/scripts/docs；P1 三个只读工具保持不变。
+7. **禁止实现**：Planner/TaskManager、Patch、approval、run_tests、Checkpointer、SQLite、interrupt、streaming、MCP/subagent/EventBus。
+8. **输入/输出**：继续使用 P1 `POST /agent/run` 与 `AgentRunResult`，不新增 thread、runs 查询或原始 State 输出。
+9. **验收场景**：直接回答、单轮/多轮/同轮多工具、工具错误恢复、模型错误、空回答、模型轮次耗尽和跨请求隔离。
+10. **必须测试**：State reducers、节点局部更新、纯路由、关键拓扑、完整消息协议、编译图复用、API/Health 回归和零网络调用。
+11. **必须理解**：StateGraph、START/END、conditional edges、reducers、node purity、模型轮次与 recursion limit 的区别。
+12. **亲手复写**：AgentState、Model Node、路由函数和 graph builder，共约 120–220 行。
+13. **主动修改练习**：仅在学习分支中增加“连续两次工具失败后提前终止”，通过 State 字段和节点更新实现。
+14. **故障注入练习**：破坏 reducer、路由、ToolMessage 配对、model_calls 或图编译位置，观察测试如何定位。
+15. **预计代码量**：以实际职责为准，不因未来规划增加模型或节点。
 16. **预计学习时间**：快速实现 2 小时；完整学习 5–6 小时。
-17. **面试题范围**：图与循环、State 设计、reducers、结构化计划、节点幂等性、图测试。
+17. **面试题范围**：图与循环、State/reducers、消息配对、纯路由、模型轮次、recursion limit、图隔离和图测试。
 
 **阶段出口**：必须证明图仍然没有文件副作用。完成阶段材料和 Git 检查后停止。
 

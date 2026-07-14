@@ -1,5 +1,7 @@
 # P1：最小 Tool Calling Agent
 
+> 历史阶段说明：本文件记录 P1 手写循环的学习基线。该生产实现已在 P2 删除并迁移到 LangGraph StateGraph；可在 Git 提交 `aa39eeb` 查看 P1 源码。当前生产路径请以 `docs/learning/P2-langgraph-stategraph.md` 和 `src/repopilot/agent/` 为准。
+
 ## 1. P1 解决的问题
 
 P1 在不使用 LangGraph、`create_agent` 或 `AgentExecutor` 的前提下，跑通最小且显式的模型工具调用闭环。模型负责决定是否调用只读工具，Python 负责校验参数、执行工具、生成 `ToolMessage`、保持调用 ID，并通过最大步数确定性终止。整个默认演示与测试使用脚本模型，不访问真实模型网络。

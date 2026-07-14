@@ -1,5 +1,7 @@
 # RepoPilot P1 面试题答案
 
+> 历史答案：本文件中的 `agent/loop.py` 与对应测试定位属于 Git 提交 `aa39eeb`。当前生产实现已迁移到 LangGraph，见 `P2-answers.md`。
+
 ## 一、概念题
 
 ### 1. Tool Calling 与普通函数调用有什么区别？
