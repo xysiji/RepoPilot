@@ -20,6 +20,7 @@ def test_initial_state_uses_fresh_containers_and_model_round_semantics() -> None
     assert set(AgentState.__annotations__) == {
         "messages",
         "run_id",
+        "state_schema_version",
         "model_calls",
         "max_steps",
         "status",
@@ -39,8 +40,11 @@ def test_initial_state_uses_fresh_containers_and_model_round_semantics() -> None
         "approval_count",
         "model_final_text",
         "last_patch_error_code",
+        "latest_context_stats",
     }
     assert first["pending_approval"] is None
+    assert first["state_schema_version"] == 1
+    assert first["latest_context_stats"] is None
     assert first["approval_decision"] is None
     assert first["repair_attempts"] == 0
     assert first["max_repair_attempts"] == 3

@@ -69,6 +69,8 @@ def _select_outcome(
         "model_error": FinalReportOutcome.MODEL_ERROR,
         "max_steps_exceeded": FinalReportOutcome.MAX_STEPS_EXCEEDED,
         "invalid_model_response": FinalReportOutcome.INVALID_MODEL_RESPONSE,
+        "context_budget_exceeded": FinalReportOutcome.CONTEXT_BUDGET_EXCEEDED,
+        "context_protocol_error": FinalReportOutcome.CONTEXT_PROTOCOL_ERROR,
     }
     if status in direct:
         return direct[status]
@@ -120,6 +122,12 @@ def _summary(outcome: FinalReportOutcome) -> str:
         ),
         FinalReportOutcome.INVALID_MODEL_RESPONSE: (
             "The model returned an invalid response before a verified repair completed."
+        ),
+        FinalReportOutcome.CONTEXT_BUDGET_EXCEEDED: (
+            "Required protocol-safe context exceeded the configured model budget."
+        ),
+        FinalReportOutcome.CONTEXT_PROTOCOL_ERROR: (
+            "Persisted messages did not form a valid tool-call protocol sequence."
         ),
     }[outcome]
 

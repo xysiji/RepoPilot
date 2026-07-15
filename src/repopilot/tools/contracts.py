@@ -42,6 +42,10 @@ class ToolExecutionPhase(StrEnum):
     TESTING = "testing"
     REVIEW = "review"
     REPORT = "report"
+    PERSISTENCE = "persistence"
+    CONTEXT = "context"
+    TRACE = "trace"
+    CLEANUP = "cleanup"
 
 
 class ToolFailureCategory(StrEnum):
@@ -61,6 +65,11 @@ class ToolFailureCategory(StrEnum):
     TEST_INFRASTRUCTURE = "test_infrastructure"
     REPAIR_BUDGET = "repair_budget"
     REVIEW = "review"
+    STORAGE = "storage"
+    COMPATIBILITY = "compatibility"
+    CONTEXT_BUDGET = "context_budget"
+    TRACE_STORAGE = "trace_storage"
+    CLEANUP = "cleanup"
 
 
 class ToolErrorCode(StrEnum):
@@ -95,6 +104,18 @@ class ToolErrorCode(StrEnum):
     NO_PENDING_APPROVAL = "no_pending_approval"
     RUN_NOT_FOUND = "run_not_found"
     RUN_ALREADY_COMPLETED = "run_already_completed"
+    RUN_NOT_TERMINAL = "run_not_terminal"
+    RUN_CLEANUP_FAILED = "run_cleanup_failed"
+    CHECKPOINT_INCOMPATIBLE = "checkpoint_incompatible"
+    PERSISTENCE_UNAVAILABLE = "persistence_unavailable"
+    CHECKPOINT_NOT_FOUND = "checkpoint_not_found"
+    RUNTIME_RECORD_NOT_FOUND = "runtime_record_not_found"
+    RUNTIME_STATE_MISMATCH = "runtime_state_mismatch"
+    CONTEXT_PROTOCOL_ERROR = "context_protocol_error"
+    CONTEXT_BUDGET_EXCEEDED = "context_budget_exceeded"
+    TRACE_WRITE_FAILED = "trace_write_failed"
+    TRACE_QUERY_FAILED = "trace_query_failed"
+    DATABASE_SCHEMA_INCOMPATIBLE = "database_schema_incompatible"
     PATCH_EMPTY = "patch_empty"
     PATCH_SOURCE_TOO_LARGE = "patch_source_too_large"
     PATCH_PROPOSED_CONTENT_TOO_LARGE = "patch_proposed_content_too_large"

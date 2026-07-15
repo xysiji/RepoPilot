@@ -28,7 +28,7 @@ PRODUCTION_TOOL_EFFECTS: Mapping[str, ToolEffect] = {
 
 _APPROVAL_TOOLS = frozenset({"propose_patch"})
 
-_EXCLUDED_DIRECTORIES = frozenset({".git", ".venv", "__pycache__"})
+_EXCLUDED_DIRECTORIES = frozenset({".git", ".repopilot", ".venv", "__pycache__"})
 _PRIVATE_KEY_PREFIXES = ("id_rsa", "id_ed25519")
 _PRIVATE_KEY_SUFFIXES = frozenset({".pem", ".key"})
 _RESERVED_WINDOWS_NAMES = frozenset(

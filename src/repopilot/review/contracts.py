@@ -36,6 +36,8 @@ class FinalReportOutcome(StrEnum):
     MODEL_ERROR = "model_error"
     MAX_STEPS_EXCEEDED = "max_steps_exceeded"
     INVALID_MODEL_RESPONSE = "invalid_model_response"
+    CONTEXT_BUDGET_EXCEEDED = "context_budget_exceeded"
+    CONTEXT_PROTOCOL_ERROR = "context_protocol_error"
 
 
 class FinalReport(BaseModel):

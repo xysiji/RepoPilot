@@ -14,6 +14,7 @@ from langchain_core.callbacks.manager import AsyncCallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import Field
 
 from repopilot.approval.contracts import ApprovalDecisionRequest
@@ -134,7 +135,13 @@ async def _two_round_demo(parent: Path) -> None:
     second_patch = "def add(left, right):\n    return left + right\n"
     model = DemoModel(patches=[first_patch, second_patch])
     runner = RecordingRunner(PytestRunner(WorkspaceGuard(workspace)))
-    service = AgentService(workspace, model, runner=runner, max_repair_attempts=2)
+    service = AgentService(
+        workspace,
+        model,
+        checkpointer=InMemorySaver(),
+        runner=runner,
+        max_repair_attempts=2,
+    )
 
     before = _hash(target)
     first_pending = await service.start_run(
@@ -171,7 +178,13 @@ async def _exhausted_demo(parent: Path) -> None:
     workspace, _target = _workspace(parent)
     model = DemoModel(patches=["def add(left, right):\n    return left * right\n"])
     runner = RecordingRunner(PytestRunner(WorkspaceGuard(workspace)))
-    service = AgentService(workspace, model, runner=runner, max_repair_attempts=1)
+    service = AgentService(
+        workspace,
+        model,
+        checkpointer=InMemorySaver(),
+        runner=runner,
+        max_repair_attempts=1,
+    )
     pending = await service.start_run(
         "Repair calculator addition",
         max_steps=4,

@@ -15,7 +15,6 @@ from repopilot.approval.contracts import (
 )
 from repopilot.patching.applicator import PatchApplicator
 from repopilot.patching.proposal import PatchProposal
-from repopilot.services.agent_service import AgentService
 from repopilot.testing.contracts import TestOutcome
 from repopilot.tools.contracts import (
     ToolErrorCode,
@@ -27,6 +26,7 @@ from repopilot.tools.contracts import (
 from repopilot.tools.policy import WorkspaceGuard
 from tests.fake_runner import ScriptedPytestRunner, make_test_result
 from tests.scripted_model import ScriptedToolCallingModel
+from tests.service_factory import AgentService
 
 
 def _call(name: str, args: dict[str, object], call_id: str) -> dict[str, object]:

@@ -14,6 +14,12 @@ from repopilot.approval.contracts import (
     approval_view,
 )
 from repopilot.approval.validation import validate_resume_decision
+from repopilot.context.contracts import (
+    ContextBudgetExceededError,
+    ContextPolicy,
+    ContextProtocolError,
+)
+from repopilot.context.manager import ContextManager
 from repopilot.patching.applicator import PatchApplicator
 from repopilot.patching.proposal import PatchProposal, proposal_safe_metadata
 from repopilot.review.report import FinalReportBuilder
@@ -50,26 +56,56 @@ _PATCH_TOOL_NAME = "propose_patch"
 class ModelNode:
     """Invoke one already-bound model and emit only a partial state update."""
 
-    def __init__(self, bound_model: Runnable[Any, BaseMessage]) -> None:
+    def __init__(
+        self,
+        bound_model: Runnable[Any, BaseMessage],
+        context_manager: ContextManager | None = None,
+    ) -> None:
         self._bound_model = bound_model
+        self._context_manager = context_manager or ContextManager(
+            ContextPolicy(
+                max_characters=60_000,
+                recent_blocks=8,
+                tool_result_max_characters=4_000,
+                summary_max_characters=2_000,
+            )
+        )
 
     async def __call__(self, state: AgentState) -> dict[str, Any]:
         model_calls = state["model_calls"] + 1
         try:
-            response = await self._bound_model.ainvoke(list(state["messages"]))
-        except Exception as exc:
+            context = self._context_manager.build(list(state["messages"]))
+        except ContextProtocolError as exc:
             return _terminal_update(
+                "context_protocol_error",
+                f"Persisted message protocol is invalid: {exc}",
+                model_calls=model_calls,
+            )
+        except ContextBudgetExceededError:
+            return _terminal_update(
+                "context_budget_exceeded",
+                "Required protocol-safe context exceeds the configured model budget",
+                model_calls=model_calls,
+            )
+        try:
+            response = await self._bound_model.ainvoke(context.messages)
+        except Exception as exc:
+            update = _terminal_update(
                 "model_error",
                 f"Model invocation failed: {type(exc).__name__}",
                 model_calls=model_calls,
             )
+            update["latest_context_stats"] = context.stats.model_dump(mode="json")
+            return update
 
         if not isinstance(response, AIMessage):
-            return _terminal_update(
+            update = _terminal_update(
                 "invalid_model_response",
                 "Model must return an AIMessage",
                 model_calls=model_calls,
             )
+            update["latest_context_stats"] = context.stats.model_dump(mode="json")
+            return update
 
         if response.tool_calls:
             for tool_call in response.tool_calls:
@@ -81,12 +117,14 @@ class ModelNode:
                         model_calls=model_calls,
                     )
                     update["messages"] = [response]
+                    update["latest_context_stats"] = context.stats.model_dump(mode="json")
                     return update
             return {
                 "messages": [response],
                 "model_calls": model_calls,
                 "status": "running",
                 "error": None,
+                "latest_context_stats": context.stats.model_dump(mode="json"),
             }
 
         final_answer = response.text.strip()
@@ -97,6 +135,7 @@ class ModelNode:
                 model_calls=model_calls,
             )
             update["messages"] = [response]
+            update["latest_context_stats"] = context.stats.model_dump(mode="json")
             return update
         if len(final_answer) > _MAX_FINAL_ANSWER_CHARACTERS:
             final_answer = final_answer[:_MAX_FINAL_ANSWER_CHARACTERS] + "\n[truncated]"
@@ -111,7 +150,8 @@ class ModelNode:
                 "error": AgentRunError(
                     code="repair_abandoned",
                     message="The model stopped proposing patches while tests were failing.",
-                ),
+                ).model_dump(mode="json"),
+                "latest_context_stats": context.stats.model_dump(mode="json"),
             }
         return {
             "messages": [response],
@@ -120,6 +160,7 @@ class ModelNode:
             "final_answer": final_answer,
             "model_final_text": final_answer,
             "error": None,
+            "latest_context_stats": context.stats.model_dump(mode="json"),
         }
 
 
@@ -512,7 +553,7 @@ def _status_after_test(
     state: AgentState,
     result: TestRunResult,
     attempt: int,
-) -> tuple[str, AgentRunError | None]:
+) -> tuple[str, dict[str, str] | None]:
     if result.outcome is TestOutcome.PASSED:
         return "running", None
     if result.outcome is TestOutcome.TEST_FAILURES:
@@ -522,7 +563,7 @@ def _status_after_test(
                 AgentRunError(
                     code="repair_attempts_exhausted",
                     message="The approved patch test-attempt limit has been reached.",
-                ),
+                ).model_dump(mode="json"),
             )
         if state["model_calls"] >= state["max_steps"]:
             return (
@@ -530,20 +571,22 @@ def _status_after_test(
                 AgentRunError(
                     code="max_steps_exceeded",
                     message=f"Maximum model steps exceeded: {state['max_steps']}",
-                ),
+                ).model_dump(mode="json"),
             )
         return "running", None
     if result.outcome is TestOutcome.TIMEOUT:
         return (
             "test_timeout",
-            AgentRunError(code="test_timeout", message=test_error_message(result.outcome)),
+            AgentRunError(
+                code="test_timeout", message=test_error_message(result.outcome)
+            ).model_dump(mode="json"),
         )
     return (
         "test_infrastructure_error",
         AgentRunError(
             code="test_infrastructure_error",
             message=test_error_message(result.outcome),
-        ),
+        ).model_dump(mode="json"),
     )
 
 
@@ -604,5 +647,5 @@ def _terminal_update(code: str, message: str, *, model_calls: int) -> dict[str, 
         "model_calls": model_calls,
         "status": code,
         "final_answer": None,
-        "error": AgentRunError(code=code, message=message),
+        "error": AgentRunError(code=code, message=message).model_dump(mode="json"),
     }

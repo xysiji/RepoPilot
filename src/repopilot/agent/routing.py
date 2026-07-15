@@ -1,4 +1,4 @@
-"""Pure conditional routing for the P5 repair-and-verification graph."""
+"""Pure conditional routing for the P6 repair-and-verification graph."""
 
 from typing import Literal
 

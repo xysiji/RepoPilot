@@ -1,12 +1,10 @@
-"""Explicit state contract for the P5 repair-and-verification graph."""
+"""Versioned state contract for the durable P6 repair graph."""
 
 import operator
 from typing import Annotated, Literal, TypedDict
 
 from langchain_core.messages import BaseMessage, HumanMessage
 from langgraph.graph.message import add_messages
-
-from repopilot.schemas.agent import AgentRunError
 
 AgentStatus = Literal[
     "running",
@@ -24,14 +22,19 @@ AgentStatus = Literal[
     "repaired",
     "no_change",
     "tests_failed",
+    "context_budget_exceeded",
+    "context_protocol_error",
+    "checkpoint_incompatible",
 ]
-AgentError = AgentRunError
+CURRENT_STATE_SCHEMA_VERSION = 1
+AgentError = dict[str, str]
 
 
 class AgentState(TypedDict):
     """Per-invocation graph state; no field is shared between requests."""
 
     run_id: str
+    state_schema_version: int
     messages: Annotated[list[BaseMessage], add_messages]
     model_calls: int
     max_steps: int
@@ -52,6 +55,7 @@ class AgentState(TypedDict):
     approval_count: int
     model_final_text: str
     last_patch_error_code: str | None
+    latest_context_stats: dict[str, int] | None
 
 
 def create_initial_state(
@@ -71,6 +75,7 @@ def create_initial_state(
 
     return AgentState(
         run_id=run_id,
+        state_schema_version=CURRENT_STATE_SCHEMA_VERSION,
         messages=[HumanMessage(content=goal)],
         model_calls=0,
         max_steps=max_steps,
@@ -91,4 +96,5 @@ def create_initial_state(
         approval_count=0,
         model_final_text="",
         last_patch_error_code=None,
+        latest_context_stats=None,
     )

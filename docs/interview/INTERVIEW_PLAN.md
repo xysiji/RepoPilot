@@ -165,3 +165,7 @@ P5 面试还必须覆盖参数序列与 `shell=False`、最小环境、timeout/k
 - 不得用 Prompt 规则回答代码安全问题。
 - 不得把 LangGraph/LangChain 的默认行为说成自己实现的算法；必须说明框架承担什么、自有代码承担什么。
 - 不得隐藏第一版删除的能力和已知限制。
+
+## P6 完成状态
+
+已生成 20 道主问题：5 道概念、5 道源码、5 道设计取舍、5 道持久化/安全/排错；覆盖 Checkpointer、thread/run ID、lifespan、restart resume、State 版本、瞬时上下文、Tool 协议、RuntimeStore、Trace 幂等、未加密 SQLite、清理、单进程限制和 Postgres 升级路径。

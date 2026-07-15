@@ -8,6 +8,7 @@ from typing import Any
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.language_models.fake_chat_models import FakeMessagesListChatModel
 from langchain_core.messages import AIMessage
+from langgraph.checkpoint.memory import InMemorySaver
 
 from repopilot.services.agent_service import AgentService
 
@@ -50,7 +51,9 @@ async def run_demo() -> None:
             AIMessage(content="安全策略拒绝了敏感文件，并允许读取示例 README。"),
         ]
     )
-    result = await AgentService(workspace, model).run("安全地检查示例项目", max_steps=3)
+    result = await AgentService(workspace, model, checkpointer=InMemorySaver()).run(
+        "安全地检查示例项目", max_steps=3
+    )
 
     print("engine: langgraph-p3-safe-executor")
     print(f"status: {result.status}")

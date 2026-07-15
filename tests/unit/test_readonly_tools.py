@@ -93,6 +93,7 @@ def test_read_file_truncates_long_content_as_success(tmp_path: Path) -> None:
         ".ENV.LOCAL",
         "nested/.env",
         ".git/config",
+        ".repopilot/runtime.sqlite3",
         ".venv/token",
         "__pycache__/x.pyc",
         "id_rsa",

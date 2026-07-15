@@ -30,6 +30,7 @@ def _app(tmp_path: Path, outcomes: list[TestOutcome]):
     (tmp_path / "calculator.py").write_text("value = 0\n", encoding="utf-8")
     settings = AppSettings(
         workspace_path=tmp_path,
+        data_directory=tmp_path.parent / f"{tmp_path.name}-runtime",
         model_api_key="api-secret-must-not-leak",
         max_repair_attempts=2,
         _env_file=None,

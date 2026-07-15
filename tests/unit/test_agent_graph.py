@@ -16,11 +16,11 @@ from langgraph.errors import GraphRecursionError
 from repopilot.agent.graph import build_agent_graph
 from repopilot.agent.state import create_initial_state
 from repopilot.patching.applicator import PatchApplicator
-from repopilot.services.agent_service import AgentService
 from repopilot.tools.executor import SafeToolExecutor
 from repopilot.tools.policy import ToolSafetyPolicy, WorkspaceGuard
 from repopilot.tools.readonly import build_readonly_tools
 from tests.scripted_model import ScriptedToolCallingModel
+from tests.service_factory import AgentService
 
 
 def _call(name: str, args: dict[str, object], call_id: str) -> dict[str, object]:
@@ -51,7 +51,7 @@ class BindingFailureModel(ScriptedToolCallingModel):
 def test_graph_topology_is_explicit_and_compiled_with_checkpointer(tmp_path: Path) -> None:
     model = ScriptedToolCallingModel(responses=[AIMessage(content="done")])
     tools, executor, applicator = _runtime(tmp_path)
-    graph = build_agent_graph(model, tools, executor, applicator)
+    graph = build_agent_graph(model, tools, executor, applicator, InMemorySaver())
     drawable = graph.get_graph()
 
     assert set(drawable.nodes) == {
@@ -282,7 +282,9 @@ def test_graph_builder_rejects_duplicate_tool_names() -> None:
     model = ScriptedToolCallingModel(responses=[AIMessage(content="unused")])
 
     with pytest.raises(ValueError, match="tool names must be unique"):
-        build_agent_graph(model, tools, None, None)  # type: ignore[arg-type]
+        build_agent_graph(  # type: ignore[arg-type]
+            model, tools, None, None, InMemorySaver()
+        )
 
 
 def test_unexpected_graph_recursion_error_is_converted_without_traceback(
@@ -315,7 +317,7 @@ def test_compiled_graph_reuse_does_not_share_state_between_invocations(tmp_path:
         responses=[AIMessage(content="first"), AIMessage(content="second")]
     )
     tools, executor, applicator = _runtime(tmp_path)
-    graph = build_agent_graph(model, tools, executor, applicator)
+    graph = build_agent_graph(model, tools, executor, applicator, InMemorySaver())
 
     first = asyncio.run(
         graph.ainvoke(
@@ -354,7 +356,7 @@ def test_final_graph_state_has_complete_protocol_sequence(tmp_path: Path) -> Non
         ]
     )
     tools, executor, applicator = _runtime(tmp_path)
-    graph = build_agent_graph(model, tools, executor, applicator)
+    graph = build_agent_graph(model, tools, executor, applicator, InMemorySaver())
 
     final = asyncio.run(
         graph.ainvoke(

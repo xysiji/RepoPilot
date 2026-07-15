@@ -1,4 +1,4 @@
-"""Build the sole production P5 repair-and-verification execution engine."""
+"""Build the durable P6 repair-and-verification execution engine."""
 
 from collections.abc import Sequence
 from typing import Any, cast
@@ -8,7 +8,6 @@ from langchain_core.messages import BaseMessage
 from langchain_core.runnables import Runnable
 from langchain_core.tools import BaseTool
 from langgraph.checkpoint.base import BaseCheckpointSaver
-from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
@@ -32,12 +31,16 @@ from repopilot.agent.routing import (
     route_after_tools,
 )
 from repopilot.agent.state import AgentState
+from repopilot.context.manager import ContextManager
 from repopilot.patching.applicator import PatchApplicator
 from repopilot.review.report import FinalReportBuilder
 from repopilot.review.reviewer import DeterministicReviewer
 from repopilot.testing.contracts import TestRunner
 from repopilot.testing.pytest_runner import PytestRunner
 from repopilot.tools.executor import SafeToolExecutor
+from repopilot.tracing.contracts import TraceEventType
+from repopilot.tracing.nodes import traced_async_node, traced_sync_node
+from repopilot.tracing.recorder import TraceRecorder
 
 
 def build_agent_graph(
@@ -45,7 +48,9 @@ def build_agent_graph(
     tools: Sequence[BaseTool],
     executor: SafeToolExecutor,
     applicator: PatchApplicator,
-    checkpointer: BaseCheckpointSaver[str] | None = None,
+    checkpointer: BaseCheckpointSaver[str],
+    context_manager: ContextManager | None = None,
+    trace_recorder: TraceRecorder | None = None,
     runner: TestRunner | None = None,
     reviewer: DeterministicReviewer | None = None,
     report_builder: FinalReportBuilder | None = None,
@@ -61,15 +66,97 @@ def build_agent_graph(
     resolved_runner = runner or PytestRunner(applicator.workspace_guard)
     resolved_reviewer = reviewer or DeterministicReviewer(applicator.workspace_guard)
     resolved_report_builder = report_builder or FinalReportBuilder()
+    model_node = ModelNode(bound_model, context_manager)
+    tool_node = ToolNode(executor)
+    approval_node = ApprovalNode(resolved_runner.target)
+    apply_node = ApplyPatchNode(applicator)
+    reject_node = RejectPatchNode()
+    tester_node = TesterNode(resolved_runner)
+    reviewer_node = ReviewerNode(resolved_reviewer)
+    report_node = FinalReportNode(resolved_report_builder)
     builder = StateGraph(AgentState)
-    builder.add_node("model", ModelNode(bound_model))
-    builder.add_node("tools", ToolNode(executor))
-    builder.add_node("approval", ApprovalNode(resolved_runner.target))
-    builder.add_node("apply_patch", ApplyPatchNode(applicator))
-    builder.add_node("reject_patch", RejectPatchNode())
-    builder.add_node("tester", TesterNode(resolved_runner))
-    builder.add_node("reviewer", ReviewerNode(resolved_reviewer))
-    builder.add_node("final_report", FinalReportNode(resolved_report_builder))
+    if trace_recorder is None:
+        builder.add_node("model", model_node)
+        builder.add_node("tools", tool_node)
+        builder.add_node("approval", approval_node)
+        builder.add_node("apply_patch", apply_node)
+        builder.add_node("reject_patch", reject_node)
+        builder.add_node("tester", tester_node)
+        builder.add_node("reviewer", reviewer_node)
+        builder.add_node("final_report", report_node)
+    else:
+        builder.add_node(
+            "model",
+            traced_async_node(
+                model_node,
+                trace_recorder,
+                node_name="model",
+                event_type=TraceEventType.MODEL_COMPLETED,
+            ),
+        )
+        builder.add_node(
+            "tools",
+            traced_sync_node(
+                tool_node,
+                trace_recorder,
+                node_name="tools",
+                event_type=TraceEventType.TOOL_COMPLETED,
+            ),
+        )
+        builder.add_node(
+            "approval",
+            traced_sync_node(
+                approval_node,
+                trace_recorder,
+                node_name="approval",
+                event_type=TraceEventType.APPROVAL_DECIDED,
+            ),
+        )
+        builder.add_node(
+            "apply_patch",
+            traced_sync_node(
+                apply_node,
+                trace_recorder,
+                node_name="apply_patch",
+                event_type=TraceEventType.PATCH_APPLIED,
+            ),
+        )
+        builder.add_node(
+            "reject_patch",
+            traced_sync_node(
+                reject_node,
+                trace_recorder,
+                node_name="reject_patch",
+                event_type=TraceEventType.PATCH_REJECTED,
+            ),
+        )
+        builder.add_node(
+            "tester",
+            traced_async_node(
+                tester_node,
+                trace_recorder,
+                node_name="tester",
+                event_type=TraceEventType.TESTS_COMPLETED,
+            ),
+        )
+        builder.add_node(
+            "reviewer",
+            traced_sync_node(
+                reviewer_node,
+                trace_recorder,
+                node_name="reviewer",
+                event_type=TraceEventType.REVIEW_COMPLETED,
+            ),
+        )
+        builder.add_node(
+            "final_report",
+            traced_sync_node(
+                report_node,
+                trace_recorder,
+                node_name="final_report",
+                event_type=TraceEventType.FINAL_REPORT_CREATED,
+            ),
+        )
     builder.add_edge(START, "model")
     builder.add_conditional_edges(
         "model",
@@ -108,6 +195,6 @@ def build_agent_graph(
     )
     builder.add_edge("final_report", END)
     return builder.compile(
-        name="repopilot-p5-agent",
-        checkpointer=checkpointer or InMemorySaver(),
+        name="repopilot-p6-agent",
+        checkpointer=checkpointer,
     )

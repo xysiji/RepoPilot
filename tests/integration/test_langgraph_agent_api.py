@@ -23,6 +23,7 @@ def test_agent_api_runs_graph_offline_without_leaking_tool_content(
     secret = "integration-secret-key"
     settings = AppSettings(
         workspace_path=tmp_path,
+        data_directory=tmp_path.parent / f"{tmp_path.name}-runtime",
         model_api_key=secret,
         model_base_url="https://example.test/v1?token=integration-url-secret",
         _env_file=None,
@@ -63,7 +64,12 @@ def test_agent_api_runs_graph_offline_without_leaking_tool_content(
 
 
 def test_agent_api_returns_stable_error_when_model_is_not_configured(tmp_path: Path) -> None:
-    settings = AppSettings(workspace_path=tmp_path, model_api_key=None, _env_file=None)
+    settings = AppSettings(
+        workspace_path=tmp_path,
+        data_directory=tmp_path.parent / f"{tmp_path.name}-runtime",
+        model_api_key=None,
+        _env_file=None,
+    )
 
     with TestClient(create_app(settings)) as client:
         response = client.post("/agent/run", json={"goal": "Inspect files"})
@@ -73,7 +79,12 @@ def test_agent_api_returns_stable_error_when_model_is_not_configured(tmp_path: P
 
 
 def test_agent_api_rejects_blank_goal_before_running_model(tmp_path: Path) -> None:
-    settings = AppSettings(workspace_path=tmp_path, model_api_key=None, _env_file=None)
+    settings = AppSettings(
+        workspace_path=tmp_path,
+        data_directory=tmp_path.parent / f"{tmp_path.name}-runtime",
+        model_api_key=None,
+        _env_file=None,
+    )
     model = ScriptedToolCallingModel(responses=[AIMessage(content="must not run")])
 
     with TestClient(create_app(settings, model_override=model)) as client:
@@ -84,7 +95,12 @@ def test_agent_api_rejects_blank_goal_before_running_model(tmp_path: Path) -> No
 
 
 def test_two_agent_api_runs_do_not_share_graph_state(tmp_path: Path) -> None:
-    settings = AppSettings(workspace_path=tmp_path, model_api_key=None, _env_file=None)
+    settings = AppSettings(
+        workspace_path=tmp_path,
+        data_directory=tmp_path.parent / f"{tmp_path.name}-runtime",
+        model_api_key=None,
+        _env_file=None,
+    )
     model = ScriptedToolCallingModel(
         responses=[AIMessage(content="first answer"), AIMessage(content="second answer")]
     )
@@ -103,7 +119,12 @@ def test_two_agent_api_runs_do_not_share_graph_state(tmp_path: Path) -> None:
 
 def test_agent_api_maps_graph_max_steps_without_recursion_error(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_text("A", encoding="utf-8")
-    settings = AppSettings(workspace_path=tmp_path, model_api_key=None, _env_file=None)
+    settings = AppSettings(
+        workspace_path=tmp_path,
+        data_directory=tmp_path.parent / f"{tmp_path.name}-runtime",
+        model_api_key=None,
+        _env_file=None,
+    )
     model = ScriptedToolCallingModel(
         responses=[
             AIMessage(
@@ -127,7 +148,12 @@ def test_agent_api_returns_sanitized_p3_policy_audit_without_raw_arguments(
 ) -> None:
     secret = "P3_SECRET_MUST_NOT_LEAK"
     (tmp_path / ".env").write_text(secret, encoding="utf-8")
-    settings = AppSettings(workspace_path=tmp_path, model_api_key=None, _env_file=None)
+    settings = AppSettings(
+        workspace_path=tmp_path,
+        data_directory=tmp_path.parent / f"{tmp_path.name}-runtime",
+        model_api_key=None,
+        _env_file=None,
+    )
     model = ScriptedToolCallingModel(
         responses=[
             AIMessage(

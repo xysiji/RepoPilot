@@ -1,6 +1,7 @@
 """Safe HTTP schemas for starting and resuming an agent run."""
 
-from typing import Literal
+from datetime import datetime
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -20,6 +21,9 @@ class AgentRunError(BaseModel):
         "test_infrastructure_error",
         "patch_apply_failed",
         "approval_rejected",
+        "context_budget_exceeded",
+        "context_protocol_error",
+        "checkpoint_incompatible",
     ]
     message: str
 
@@ -41,6 +45,9 @@ class AgentRunResult(BaseModel):
         "test_infrastructure_error",
         "patch_apply_failed",
         "approval_rejected",
+        "context_budget_exceeded",
+        "context_protocol_error",
+        "checkpoint_incompatible",
     ]
     final_answer: str = ""
     steps: int
@@ -64,3 +71,65 @@ class AgentRunRequest(BaseModel):
         if not value.strip():
             raise ValueError("goal must not be blank")
         return value
+
+
+class AgentRunView(BaseModel):
+    """Safe restart-aware projection of a persisted run."""
+
+    run_id: str
+    status: str
+    outcome: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+    awaiting_approval: bool
+    current_proposal_id: str | None = None
+    repair_attempts: int
+    max_repair_attempts: int
+    model_calls: int
+    latest_test_outcome: str | None = None
+    review_status: str | None = None
+    approval: ApprovalRequestView | None = None
+    final_report: FinalReport | None = None
+    latest_context_stats: dict[str, int] | None = None
+
+
+class AgentRunSummary(BaseModel):
+    run_id: str
+    status: str
+    outcome: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    completed_at: datetime | None = None
+    awaiting_approval: bool
+    current_proposal_id: str | None = None
+    repair_attempts: int
+    max_repair_attempts: int
+    model_calls: int
+    latest_test_outcome: str | None = None
+    review_status: str | None = None
+
+
+class AgentRunListResponse(BaseModel):
+    items: list[AgentRunSummary]
+    next_cursor: str | None = None
+
+
+class TraceEventView(BaseModel):
+    event_id: int
+    event_key: str
+    event_type: str
+    node_name: str | None = None
+    phase: str
+    status: str
+    created_at: datetime
+    safe_payload: dict[str, Any]
+
+
+class TraceEventListResponse(BaseModel):
+    items: list[TraceEventView]
+
+
+class DeleteRunResponse(BaseModel):
+    run_id: str
+    deleted: bool = True

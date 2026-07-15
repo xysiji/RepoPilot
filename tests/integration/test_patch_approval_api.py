@@ -23,7 +23,12 @@ def _call(path: str, content: str, call_id: str = "patch-call") -> dict[str, obj
 
 
 def _app(tmp_path: Path, responses: list[AIMessage], *, pass_count: int = 1):
-    settings = AppSettings(workspace_path=tmp_path, model_api_key=None, _env_file=None)
+    settings = AppSettings(
+        workspace_path=tmp_path,
+        data_directory=tmp_path.parent / f"{tmp_path.name}-runtime",
+        model_api_key=None,
+        _env_file=None,
+    )
     model = ScriptedToolCallingModel(responses=responses)
     runner = ScriptedPytestRunner(
         [make_test_result(TestOutcome.PASSED, exit_code=0) for _ in range(pass_count)]

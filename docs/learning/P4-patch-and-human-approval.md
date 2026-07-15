@@ -228,3 +228,7 @@ tool_executions += patch record
 ## 38. 一分钟面试口述稿
 
 “P4 在 P3 安全管线后只加了一个 `propose_patch`。模型提交单个既有文件的完整新内容，但不能写；Python 先做 Schema、WorkspaceGuard、UTF-8 和资源校验，再从真实 old/new content 计算完整 unified diff、双 SHA-256 和服务端 proposal_id。Proposal 进入 LangGraph checkpoint，Approval Node 是唯一 interrupt 调用者，而且 interrupt 前零副作用。API 用服务端 run_id 作为 thread_id，只接受匹配 proposal_id 的 approve/reject。恢复后有效批准进入独立 Apply 节点，再次复核路径、链接、original hash、proposed hash 和 Diff 绑定；文件变化返回 stale。写入使用同目录 temp、flush/fsync/close 和 os.replace，写后再验 hash。拒绝生成 error ToolMessage 且字节不变，批准生成 success ToolMessage，两者都保留原 tool call ID。P4 的 InMemorySaver 只支持进程内恢复，不是长期记忆；SQLite、pytest 循环和多文件事务都留到后续阶段。”
+
+## 39. P6 后续演进补充
+
+P4 的审批 interrupt 已在 P6 由磁盘 AsyncSqliteSaver 持久化；恢复不再依赖旧进程 Graph、锁或 InMemorySaver。proposal、State 版本和文件 preimage 仍必须重新校验，持久化不会扩大审批授权。

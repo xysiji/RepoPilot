@@ -35,6 +35,16 @@ class AppSettings(BaseSettings):
     pytest_timeout_seconds: float = Field(default=60.0, ge=0.1, le=600.0)
     pytest_max_output_characters: int = Field(default=20_000, ge=256, le=200_000)
     max_repair_attempts: int = Field(default=3, ge=1, le=5)
+    data_directory: Path = Path(".repopilot")
+    checkpoint_database_name: str = "checkpoints.sqlite3"
+    runtime_database_name: str = "runtime.sqlite3"
+    run_retention_days: int = Field(default=30, ge=1, le=3650)
+    trace_retention_days: int = Field(default=30, ge=1, le=3650)
+    max_trace_events_per_run: int = Field(default=500, ge=10, le=10_000)
+    model_context_max_characters: int = Field(default=60_000, ge=2_000, le=500_000)
+    model_context_recent_blocks: int = Field(default=8, ge=1, le=100)
+    model_context_tool_result_max_characters: int = Field(default=4_000, ge=128, le=100_000)
+    model_context_summary_max_characters: int = Field(default=2_000, ge=128, le=20_000)
 
     @field_validator("log_level")
     @classmethod
@@ -78,6 +88,14 @@ class AppSettings(BaseSettings):
         if not parts:
             raise ValueError("pytest_target must identify a path below the workspace root")
         return "/".join(parts)
+
+    @field_validator("checkpoint_database_name", "runtime_database_name")
+    @classmethod
+    def validate_database_name(cls, value: str) -> str:
+        name = value.strip()
+        if not name or Path(name).name != name or not name.endswith(".sqlite3"):
+            raise ValueError("database name must be a local .sqlite3 file name")
+        return name
 
     def safe_dump(self) -> dict[str, Any]:
         """Export non-sensitive settings for diagnostics."""

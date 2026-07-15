@@ -355,3 +355,14 @@
 - LangGraph 条件边替代手写重试循环；`max_steps` 限模型轮次，`max_repair_attempts` 限实际 Apply+pytest 次数，两者由 Python 独立裁决。
 - Reviewer 是普通 Python 组件，只核对审批、一次性 context、ToolMessage、Patch/Test ID、文件 hash、exit code 和预算证据；P7 才可能评估 Reviewer Subgraph。
 - P5 没有新增依赖，仍使用 `InMemorySaver`；没有实现 Planner、Git Diff Reviewer、SQLite、Trace、Shell、Docker、MCP、Dify 或 Subagent。
+
+## 9. P6 实际迁移记录
+
+| 参考主题 | RepoPilot P6 决策 | 结果 |
+| --- | --- | --- |
+| Session Store | 用 LangGraph AsyncSqliteSaver 替换，不迁移 JSONL Session/Manager | framework replacement |
+| TraceWriter | 独立实现小型 RuntimeStore + TraceRecorder，不迁移 EventBus | adapted problem, new implementation |
+| Context Budget/Compactor | 保留预算、原子工具交换与失败不破坏 State 的问题；采用确定性瞬时裁剪 | adapted problem, new implementation |
+| daemon/IPC | 不迁移；FastAPI lifespan 管理单进程本地资源 | removed |
+
+参考源码只读且未修改，没有复制 Session、Trace、EventBus 或 compactor 实现。P7 的 Reviewer Subgraph、MCP、Skills 和多 Agent 仍未开始。

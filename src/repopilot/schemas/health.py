@@ -16,3 +16,7 @@ class HealthResponse(BaseModel):
     model_provider: str
     model_name: str
     model_configured: bool
+    persistence_backend: Literal["sqlite"] = "sqlite"
+    persistence_ready: bool
+    context_policy: Literal["deterministic_compaction"] = "deterministic_compaction"
+    trace_backend: Literal["sqlite"] = "sqlite"

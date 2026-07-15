@@ -1,5 +1,6 @@
 # Local private reference materials
 /reference_materials/
+/.repopilot/
 
 # Local environment
 .env

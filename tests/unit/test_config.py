@@ -28,6 +28,10 @@ def test_non_sensitive_defaults_are_available() -> None:
     assert settings.model_api_key is None
     assert settings.pytest_target == "tests"
     assert settings.max_repair_attempts == 3
+    assert settings.data_directory == Path(".repopilot")
+    assert settings.checkpoint_database_name == "checkpoints.sqlite3"
+    assert settings.runtime_database_name == "runtime.sqlite3"
+    assert settings.model_context_max_characters == 60_000
 
 
 def test_environment_variables_override_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -115,5 +119,22 @@ def test_pytest_target_must_be_a_safe_relative_workspace_path(target: str) -> No
     ],
 )
 def test_invalid_test_runner_limits_are_rejected(field: str, value: float) -> None:
+    with pytest.raises(ValidationError):
+        AppSettings(**{field: value}, _env_file=None)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("checkpoint_database_name", "../checkpoint.sqlite3"),
+        ("runtime_database_name", "runtime.db"),
+        ("run_retention_days", 0),
+        ("trace_retention_days", 0),
+        ("max_trace_events_per_run", 9),
+        ("model_context_max_characters", 1999),
+        ("model_context_recent_blocks", 0),
+    ],
+)
+def test_invalid_p6_storage_and_context_limits_are_rejected(field: str, value: object) -> None:
     with pytest.raises(ValidationError):
         AppSettings(**{field: value}, _env_file=None)

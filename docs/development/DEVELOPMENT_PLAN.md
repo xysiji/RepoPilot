@@ -212,3 +212,7 @@
 4. `pytest`、`git diff --check` 通过；人工检查 Git Diff 无参考资料泄露。
 5. 阶段学习笔记、20 个面试题主题和真实源码答案已生成。
 6. 不自动创建下一阶段文件或依赖。
+
+## 11. P6 实际完成记录
+
+P6 已完成 AsyncSqliteSaver、runtime schema v1、run/query/events/delete API、两类真实重启恢复、确定性 ContextManager、本地幂等 Trace、lifespan 资源关闭和离线 A/B/C Demo。生产不再使用 InMemorySaver；旧单元测试与 P2～P5 Demo 仅显式注入内存 saver。P7 未开始。

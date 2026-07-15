@@ -1,0 +1,1 @@
+"""Redacted structured trace recording."""

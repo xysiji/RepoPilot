@@ -72,6 +72,7 @@ def test_side_effect_and_unclassified_tools_fail_closed(
         (".env", "sensitive_path_denied"),
         ("nested/.ENV.LOCAL", "sensitive_path_denied"),
         (".git/config", "sensitive_path_denied"),
+        (".repopilot/runtime.sqlite3", "sensitive_path_denied"),
         (".venv/token", "sensitive_path_denied"),
         ("__PYCACHE__/x.pyc", "sensitive_path_denied"),
         ("id_rsa_backup", "sensitive_path_denied"),

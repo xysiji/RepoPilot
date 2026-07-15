@@ -65,7 +65,7 @@ def test_model_node_converts_model_exception_to_stable_error() -> None:
 
     assert update["status"] == "model_error"
     assert update["model_calls"] == 1
-    assert update["error"].message == "Model invocation failed: RuntimeError"
+    assert update["error"]["message"] == "Model invocation failed: RuntimeError"
 
 
 def test_tool_node_executes_all_calls_in_order_and_preserves_ids(tmp_path: Path) -> None:

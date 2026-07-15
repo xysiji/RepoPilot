@@ -7,10 +7,10 @@ from pathlib import Path
 from langchain_core.messages import AIMessage, ToolMessage
 
 from repopilot.approval.contracts import ApprovalDecisionRequest
-from repopilot.services.agent_service import AgentService
 from repopilot.testing.contracts import TestOutcome
 from tests.fake_runner import ScriptedPytestRunner, make_test_result
 from tests.scripted_model import ScriptedToolCallingModel
+from tests.service_factory import AgentService
 
 
 def _patch(content: str, call_id: str) -> dict[str, object]:

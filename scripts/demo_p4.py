@@ -13,6 +13,7 @@ from langchain_core.callbacks.manager import AsyncCallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import Field
 
 from repopilot.approval.contracts import ApprovalDecisionRequest
@@ -89,7 +90,7 @@ async def _demo(decision: str) -> None:
             relative_path="sample_project/src/example.py",
             proposed_content="VALUE = 2\n",
         )
-        service = AgentService(workspace, model)
+        service = AgentService(workspace, model, checkpointer=InMemorySaver())
 
         pending = await service.start_run("Change the demo value", max_steps=3)
         assert pending.approval is not None
